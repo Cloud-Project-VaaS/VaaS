@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Login</title>
+</head>
+<body>
+    <h2>Enter your username:</h2>
+    <input id="username" placeholder="Your name"/>
+    <button onclick="register()">Login</button>
+
+    <script>
+        async function register(){
+            const username = document.getElementById("username").value;
+            if(!username) return;
+            await fetch("/register", {
+                method:"POST",
+                headers:{"Content-Type":"application/json"},
+                body: JSON.stringify({username})
+            });
+            window.location.href = "/chat/" + username;
+        }
+    </script>
+</body>
+</html>
+

@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Cloud Chat</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h2>WhatsApp Style Chat</h2>
+
+  <div id="login">
+    <input id="username" placeholder="Enter your name" />
+    <button id="joinBtn">Join</button>
+  </div>
+
+  <div id="chat" style="display:none;">
+    <div>
+      <h3>Online Users</h3>
+      <ul id="users"></ul>
+    </div>
+
+    <div id="messagesBox">
+      <div id="messages"></div>
+      <input id="recipient" placeholder="Recipient" />
+      <input id="messageInput" placeholder="Type a message" />
+      <button id="sendBtn">Send</button>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="client.js"></script>
+</body>
+</html>
+

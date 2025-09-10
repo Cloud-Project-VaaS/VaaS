@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cloud Chat</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; display:flex; height:100vh; }
+        #users { width:250px; border-right:1px solid #ccc; overflow:auto; padding:10px; background:#f0f0f0; }
+        #chat-container { flex:1; display:flex; flex-direction:column; }
+        #header { padding:10px; background:#075E54; color:white; font-weight:bold; }
+        #chat { flex:1; padding:10px; overflow-y:auto; display:flex; flex-direction:column; }
+        .bubble { padding:8px 12px; margin:5px; border-radius:15px; max-width:70%; word-wrap:break-word; }
+        .sent { background-color:#DCF8C6; align-self:flex-end; text-align:right; }
+        .received { background-color:#FFF; align-self:flex-start; text-align:left; }
+        .timestamp { font-size:0.7em; color:#555; margin-top:2px; }
+        #input-container { display:flex; padding:10px; border-top:1px solid #ccc; }
+        #msg { flex:1; padding:8px; border-radius:20px; border:1px solid #ccc; }
+        button { margin-left:10px; padding:8px 12px; border:none; border-radius:20px; background:#075E54; color:white; cursor:pointer; }
+        .user { padding:8px; border-bottom:1px solid #ccc; cursor:pointer; display:flex; justify-content:space-between; }
+        .user:hover { background:#e0e0e0; }
+        .online { width:10px; height:10px; border-radius:50%; background:green; display:inline-block; margin-right:5px; }
+        .offline { width:10px; height:10px; border-radius:50%; background:gray; display:inline-block; margin-right:5px; }
+    </style>
+</head>
+<body>
+    <div id="users"></div>
+
+    <div id="chat-container">
+        <div id="header">Chat with <span id="chat-with">None</span></div>
+        <div id="chat"></div>
+        <div id="input-container">
+            <input id="msg" placeholder="Type a message..." />
+            <button id="send-btn">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const username = "{{username}}";
+        const socket = io();
+
+        let recipient = null;
+        let unread = {};
+        let onlineUsers = {};
+
+        console.log("Socket.IO initializing...");
+        socket.on('connect', () => console.log("Socket connected:", socket.id));
+        socket.on('disconnect', () => console.log("Socket disconnected"));
+
+        // Join server
+        socket.emit('join', {username});
+
+        async function loadUsers(){
+            try {
+                let res = await fetch("/users?me="+username);
+                let users = await res.json();
+                const ul = document.getElementById("users");
+                ul.innerHTML = "";
+                users.forEach(u=>{
+                    const li = document.createElement("div");
+                    li.className = "user";
+                    li.onclick = ()=> selectUser(u);
+
+                    const status = document.createElement("span");
+                    status.className = onlineUsers[u] ? "online" : "offline";
+                    li.appendChild(status);
+
+                    const text = document.createElement("span");
+                    text.textContent = u + (unread[u] ? ` (${unread[u]})` : "");
+                    li.appendChild(text);
+
+                    ul.appendChild(li);
+                });
+            } catch(e){
+                console.error("Error loading users:", e);
+            }
+        }
+        loadUsers();
+        setInterval(loadUsers, 5000);
+
+        function selectUser(u){
+            recipient = u;
+            document.getElementById("chat-with").textContent = u;
+            unread[u] = 0;
+
+            fetch(`/messages/${username}/${recipient}`)
+                .then(res => res.json())
+                .then(async data => {
+                    const chatDiv = document.getElementById("chat");
+                    chatDiv.innerHTML = "";
+                    for(const m of data){
+                        const pt = await decrypt(m.ciphertext);
+                        const type = m.sender === username ? 'sent' : 'received';
+                        addBubble(pt, type, new Date().toLocaleTimeString());
+                    }
+                });
+        }
+	
+	async function encrypt(msg){
+	    const enc = new TextEncoder();
+	    const subtle = window.crypto.subtle;   // ✅ ensure we use the right API
+	    const key = await subtle.importKey(
+		"raw",
+		enc.encode("1234567890123456"),
+		{name:"AES-GCM"},
+		false,
+		["encrypt"]
+	    );
+	    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+	    const ct = await subtle.encrypt({name:"AES-GCM", iv}, key, enc.encode(msg));
+	    const combined = new Uint8Array(iv.length + ct.byteLength);
+	    combined.set(iv);
+	    combined.set(new Uint8Array(ct), iv.length);
+	    return btoa(String.fromCharCode(...combined));
+	}
+
+	async function decrypt(ct_b64){
+	    const dec = new TextDecoder();
+	    const combined = Uint8Array.from(atob(ct_b64), c => c.charCodeAt(0));
+	    const iv = combined.slice(0,12);
+	    const ct = combined.slice(12);
+	    const subtle = window.crypto.subtle;   // ✅ same fix here
+	    const key = await subtle.importKey(
+		"raw",
+		new TextEncoder().encode("1234567890123456"),
+		{name:"AES-GCM"},
+		false,
+		["decrypt"]
+	    );
+	    const plain = await subtle.decrypt({name:"AES-GCM", iv}, key, ct);
+	    return dec.decode(plain);
+	}
+
+        function addBubble(msg, type, time){
+            const chatDiv = document.getElementById("chat");
+            const div = document.createElement("div");
+            div.className = "bubble " + type;
+            div.innerHTML = msg + `<div class="timestamp">${time}</div>`;
+            chatDiv.appendChild(div);
+            chatDiv.scrollTop = chatDiv.scrollHeight;
+        }
+
+        async function sendMessage(){
+            if(!recipient) return alert("Select a user first");
+            const msgInput = document.getElementById("msg");
+            const msg = msgInput.value.trim();
+            if(!msg) return;
+
+            console.log("Sending message:", msg);
+
+            try {
+                const ct = await encrypt(msg);
+                console.log("Encrypted message:", ct);
+                socket.emit('send_message', {sender: username, recipient, ciphertext: ct});
+                addBubble(msg, 'sent', new Date().toLocaleTimeString());
+                msgInput.value = "";
+            } catch(e){
+                console.error("Error encrypting/sending message:", e);
+            }
+        }
+
+        document.getElementById("send-btn").addEventListener("click", sendMessage);
+        document.getElementById("msg").addEventListener("keypress", function(e){
+            if(e.key === "Enter") sendMessage();
+        });
+
+        socket.on('receive_message', async (data)=>{
+            const pt = await decrypt(data.ciphertext);
+            onlineUsers[data.sender] = true;
+
+            if(data.sender === recipient){
+                addBubble(pt, 'received', new Date().toLocaleTimeString());
+            } else {
+                unread[data.sender] = (unread[data.sender] || 0) + 1;
+            }
+        });
+
+        setInterval(()=>{ onlineUsers[username] = true; }, 10000);
+    </script>
+</body>
+</html>
+
