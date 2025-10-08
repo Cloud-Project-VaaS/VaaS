@@ -75,25 +75,27 @@ def lambda_handler(event, context):
     for issue in issues:
         issue_payload = json.dumps(issue)
 
-        # Asynchronously invoke the worker Lambdas
-        type_res = lambda_client.invoke(FunctionName='classify_type', Payload=issue_payload)
+        # 1. Invoke the NEW heavy classifier for the type
+        heavy_type_res = lambda_client.invoke(FunctionName='classify_issue_heavy', Payload=issue_payload)
+        heavy_type_payload = json.loads(heavy_type_res['Payload'].read())
+
+        # 2. Keep using the simple classifiers for priority and assignee
         priority_res = lambda_client.invoke(FunctionName='classify_priority', Payload=issue_payload)
         assignee_res = lambda_client.invoke(FunctionName='classify_assignee', Payload=issue_payload)
 
-        # Decode the JSON payloads from the responses
-        type_payload = json.loads(type_res['Payload'].read())
         priority_payload = json.loads(priority_res['Payload'].read())
         assignee_payload = json.loads(assignee_res['Payload'].read())
-        
-        # Aggregate the results
+
+        # 3. Aggregate the results
         classified_results.append({
             "issue_title": issue.get('title'),
             "url": issue.get('html_url'),
             "classification": {
-                "type": type_payload.get('category'),
+                "type": heavy_type_payload.get('category'),
                 "priority": priority_payload.get('priority'),
                 "assignee": assignee_payload.get('assignee')
-            }
+            },
+            "scores": heavy_type_payload.get('scores')
         })
 
     # Return the final list of classified issues
