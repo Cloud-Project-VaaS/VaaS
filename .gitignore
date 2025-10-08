@@ -1,0 +1,12 @@
+# Ignore AWS key files
+*.pem
+
+# Ignore local environment variables
+.env
+
+# Ignore Lambda dependency packages
+lambdas/fetch_and_classify/certifi*
+lambdas/fetch_and_classify/charset_normalizer*
+lambdas/fetch_and_classify/idna*
+lambdas/fetch_and_classify/requests*
+lambdas/fetch_and_classify/urllib3*
