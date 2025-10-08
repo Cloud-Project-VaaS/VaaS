@@ -34,12 +34,14 @@ def run_classification():
 
         if 'body' in response_payload:
             results = json.loads(response_payload['body'])
-            return jsonify(results)
+            # Instead of returning JSON, we now render the new HTML template
+            # We pass the results in two formats: a list for the table, and a JSON string for the download button
+            return render_template('results.html', issues=results, issues_json=json.dumps(results, indent=2))
         else:
             return jsonify(response_payload), 500
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return f"An error occurred: {str(e)}", 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)s
+    app.run(host='0.0.0.0', port=5000)
