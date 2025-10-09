@@ -72,10 +72,14 @@ def lambda_handler(event, context):
     classified_results = []
     
     # --- 3. Invoke Classifiers for Each Issue ---
+    # This is the NEW code block to paste inside the 'for' loop
     for issue in issues:
         issue_payload = json.dumps(issue)
 
-        # 1. Invoke the NEW heavy classifier for the type
+        # --- Check if it's an Issue or a Pull Request ---
+        item_type = "Pull Request" if "pull_request" in issue else "Issue"
+
+        # 1. Invoke the heavy classifier for the type
         heavy_type_res = lambda_client.invoke(FunctionName='classify_issue_heavy', Payload=issue_payload)
         heavy_type_payload = json.loads(heavy_type_res['Payload'].read())
 
@@ -86,10 +90,11 @@ def lambda_handler(event, context):
         priority_payload = json.loads(priority_res['Payload'].read())
         assignee_payload = json.loads(assignee_res['Payload'].read())
 
-        # 3. Aggregate the results
+        # 3. Aggregate the results, now including the 'item_type'
         classified_results.append({
             "issue_title": issue.get('title'),
             "url": issue.get('html_url'),
+            "item_type": item_type,  # <-- ADDED THIS NEW FIELD
             "classification": {
                 "type": heavy_type_payload.get('category'),
                 "priority": priority_payload.get('priority'),
