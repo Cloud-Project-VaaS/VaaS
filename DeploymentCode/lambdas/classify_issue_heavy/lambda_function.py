@@ -10,7 +10,13 @@ model = AutoModelForSequenceClassification.from_pretrained(SAVE_MODEL_PATH)
 model.eval()
 
 def _predict_probabilities(text: str) -> Dict[str, float]:
-    inputs = tokenizer(text, return_tensors="pt")
+    # Tokenize the new text
+    inputs = tokenizer(
+        new_issue,
+        return_tensors="pt",
+        truncation=True,       # enables auto truncation
+        max_length=512,        # limit for most transformer models
+    )
     with torch.no_grad():
         outputs = model(**inputs)
     logits = outputs.logits
