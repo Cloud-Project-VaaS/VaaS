@@ -1,19 +1,14 @@
-# Start from the official AWS Lambda Python base image
-FROM public.ecr.aws/lambda/python:3.12
+# Use the efficient, shared base image
+FROM 248612013410.dkr.ecr.ap-south-1.amazonaws.com/classifier-base:latest
 
-# Copy the requirements file
-COPY requirements.txt .
+# We no longer need to copy requirements.txt or run pip install
 
-# Install the specified packages
-RUN pip install -r requirements.txt
-
-# Copy and run the download script to bake the model into the image
-# This happens only ONCE during the build process
+# Copy and run the script to download THIS function's specific model
 COPY download_model.py .
 RUN python3 download_model.py
 
-# Copy the Lambda handler code
+# Copy the handler code
 COPY lambda_function.py .
 
-# Set the command to run your handler function
+# Set the command
 CMD [ "lambda_function.lambda_handler" ]
