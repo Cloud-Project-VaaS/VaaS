@@ -12,7 +12,7 @@ model.eval()
 def _predict_probabilities(text: str) -> Dict[str, float]:
     # Tokenize the new text
     inputs = tokenizer(
-        new_issue,
+        text,
         return_tensors="pt",
         truncation=True,       # enables auto truncation
         max_length=512,        # limit for most transformer models
