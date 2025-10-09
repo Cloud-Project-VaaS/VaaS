@@ -30,7 +30,7 @@ def get_priority_score(text: str, priority: str) -> float:
     probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
     return probs[0][1].item()
 
-def handler(event: List[Dict[str, Any]], context: Any) -> List[Dict[str, Any]]:
+def lambda_handler(event: List[Dict[str, Any]], context: Any) -> List[Dict[str, Any]]:
     # 'event' is now a LIST of issue objects
     issues_list = event
     results_list = []

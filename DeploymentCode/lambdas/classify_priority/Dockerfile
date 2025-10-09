@@ -7,4 +7,4 @@ RUN python3 download_model.py
 
 COPY lambda_function.py .
 
-CMD [ "lambda_function.handler" ]
+CMD [ "lambda_function.lambda_handler" ]

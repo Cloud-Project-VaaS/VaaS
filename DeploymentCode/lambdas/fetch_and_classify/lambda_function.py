@@ -4,7 +4,22 @@ import requests
 from datetime import datetime, timedelta
 
 lambda_client = boto3.client('lambda')
-S3_BUCKET = "cloudproject-deploymentcode-metadata" # Your S3 bucket name
+S3_BUCKET = "cloudproject-deploymentcode-metadata"
+
+def get_results_from_payload(response):
+    """
+    Helper function to correctly parse the payload from a Lambda invocation.
+    It handles cases where the invoked function returns a direct JSON object/list
+    or an API Gateway-style proxy response with a stringified 'body'.
+    """
+    payload = json.loads(response['Payload'].read())
+    # Check if the payload is a dictionary containing a 'body' key
+    if isinstance(payload, dict) and 'body' in payload:
+        # If so, parse the body string to get the actual results
+        return json.loads(payload['body'])
+    else:
+        # Otherwise, the payload is the result itself
+        return payload
 
 def lambda_handler(event, context):
     repo_name = event.get('repo_name')
@@ -23,19 +38,18 @@ def lambda_handler(event, context):
     if not issues:
         return {'statusCode': 200, 'body': json.dumps([])}
 
-    # --- Batch Invoke All Three Classifiers ONCE ---
     payload = json.dumps(issues)
     type_response = lambda_client.invoke(FunctionName='classify-issue-heavy', Payload=payload)
-    priority_response = lambda_client.invoke(FunctionName='classify-priority', Payload=payload)
-    assignee_response = lambda_client.invoke(FunctionName='classify-assignee', Payload=payload)
+    priority_response = lambda_client.invoke(FunctionName='classify_priority', Payload=payload)
+    assignee_response = lambda_client.invoke(FunctionName='classify_assignee', Payload=payload)
     
-    type_results = json.loads(type_response['Payload'].read())
-    priority_results = json.loads(priority_response['Payload'].read())
-    assignee_results = json.loads(assignee_response['Payload'].read())
+    # Use the new helper function to safely extract results
+    type_results = get_results_from_payload(type_response)
+    priority_results = get_results_from_payload(priority_response)
+    assignee_results = get_results_from_payload(assignee_response)
 
     # --- Merge All Results ---
     merged_data = {}
-    
     for issue in issues:
         issue_id = issue.get('id')
         merged_data[issue_id] = {
