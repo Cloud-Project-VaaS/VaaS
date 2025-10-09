@@ -80,7 +80,7 @@ def lambda_handler(event, context):
         item_type = "Pull Request" if "pull_request" in issue else "Issue"
 
         # 1. Invoke the heavy classifier for the type
-        heavy_type_res = lambda_client.invoke(FunctionName='classify_issue_heavy', Payload=issue_payload)
+        heavy_type_res = lambda_client.invoke(FunctionName='classify-issue-heavy', Payload=issue_payload)
         heavy_type_payload = json.loads(heavy_type_res['Payload'].read())
 
         # 2. Keep using the simple classifiers for priority and assignee
