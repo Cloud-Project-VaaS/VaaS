@@ -2,9 +2,9 @@
 FROM 248612013410.dkr.ecr.ap-south-1.amazonaws.com/classifier-base:latest
 
 COPY download_model.py .
-COPY lambda_function.py .
-
-# Run the script to download and bake the models into the image
 RUN python3 download_model.py
+
+
+COPY lambda_function.py .
 
 CMD [ "lambda_function.handler" ]
