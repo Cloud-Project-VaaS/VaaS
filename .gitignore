@@ -10,3 +10,22 @@ lambdas/fetch_and_classify/charset_normalizer*
 lambdas/fetch_and_classify/idna*
 lambdas/fetch_and_classify/requests*
 lambdas/fetch_and_classify/urllib3*
+
+test_folder/
+
+# Ignore all contents in lambda folders...
+DeploymentCode/lambdas/*/*
+
+# ...BUT, do NOT ignore the files that are our actual source code
+!DeploymentCode/lambdas/*/*.py
+!DeploymentCode/lambdas/*/*.json
+!DeploymentCode/lambdas/*/*.txt
+!DeploymentCode/lambdas/*/*.html
+!DeploymentCode/lambdas/*/Dockerfile
+!DeploymentCode/lambdas/*/templates
+!DeploymentCode/lambdas/*/templates/*
+
+# ...AND, do NOT ignore the .zip deployment packages (optional, but good to track)
+!DeploymentCode/lambdas/*/*.zip
+
+DeploymentCode/lambdas/classify_assignee/threadpoolctl.py
