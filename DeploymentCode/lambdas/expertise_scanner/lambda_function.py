@@ -41,63 +41,55 @@ dynamodb = boto3.resource('dynamodb')
 
 # --- NEW: LAMBDA HANDLER (Main Entrypoint) ---
 def lambda_handler(event, context):
-    """
-    This is the new entrypoint for the Lambda function.
-    It replaces 'if __name__ == "__main__":'
-    """
-    print(f"Received event: {json.dumps(event)}")
     
-    # 1. Get event details (from installation-manager or EventBridge)
-    #    Payload is {"repo_name": "owner/repo", "installation_id": 12345}
-    repo_name = event.get('repo_name')
-    installation_id = event.get('installation_id')
+    print("Event Received:")
+    print(json.dumps(event)) # Log the full event for debugging
     
-    if not repo_name or not installation_id:
-        print("FATAL: Missing 'repo_name' or 'installation_id' in event.")
-        return {"statusCode": 400, "body": "Missing payload"}
-        
-    # 2. Get GitHub App credentials from AWS Secrets Manager
-    # --- MODIFIED: Using your secret name 'github-app-credentials' ---
+    # 1. Parse the event from EventBridge
+    # The data we sent is in the 'detail' field.
     try:
-        secret_name = "github-app-credentials" # <-- Using your secret name
-        secret_response = secrets_client.get_secret_value(SecretId=secret_name)
+        source = event.get('source')
+        detail_type = event.get('detail-type')
         
-        # --- MODIFIED: Parse the JSON secret string ---
-        secret_data = json.loads(secret_response['SecretString'])
-        private_key = secret_data['PRIVATE_KEY']
-        app_id = secret_data['APP_ID']
-        
-    except Exception as e:
-        print(f"FATAL: Could not retrieve or parse secret from Secrets Manager. Error: {e}")
-        return {"statusCode": 500, "body": "Internal auth error"}
+        # Check if this is the event we expect
+        if source == "github.webhook.handler" and detail_type == "repository.added":
+            print("Processing a 'repository.added' event.")
+            
+            # The 'detail' field is a JSON string, so we need to load it
+            repo_details = json.loads(event['detail'])
+            
+            installation_id = repo_details.get('installation_id')
+            repo_name = repo_details.get('repo_name')
+            
+            if not installation_id or not repo_name:
+                print("Error: Event detail is missing installation_id or repo_name.")
+                return {'statusCode': 400, 'body': 'Missing key data in event detail.'}
 
-    # 3. Authenticate to get a short-lived token (replaces the PAT)
-    try:
-        # --- MODIFIED: Pass app_id to the auth function ---
-        token = get_installation_access_token(installation_id, private_key, app_id)
-        if not token:
-             raise Exception("Token generation returned None")
-    except Exception as e:
-        print(f"FATAL: Could not get installation token. Error: {e}")
-        return {"statusCode": 500, "body": "GitHub token generation failed"}
+            print(f"Successfully parsed event for installation ID: {installation_id}")
+            print(f"Repository to scan: {repo_name}")
 
-    # 4. Get scan days (optional)
-    days_to_scan = int(event.get('days_to_scan', 30))
-    
-    # 5. Run your main async logic
-    print(f"--- Starting expertise scan for {repo_name} ---")
-    try:
-        # This calls your existing 'main' function with the new args
-        asyncio.run(main(repo_name, token, days_to_scan))
-        
-        print(f"--- Successfully completed scan for {repo_name} ---")
-        return {"statusCode": 200, "body": json.dumps(f"Scan complete for {repo_name}")}
-        
+            # --- YOUR MAIN LOGIC GOES HERE ---
+            # 2. Authenticate with the installation_id
+            # 3. Get the list of contributors for repo_name
+            # 4. Run your two-pass prompt analysis on them
+            # 5. Save the results (e.g., to S3 or another DynamoDB table)
+            
+            # For now, we'll just return a success message
+            message = f"Successfully received event for repo: {repo_name}"
+            return {'statusCode': 200, 'body': message}
+
+        else:
+            # This will handle other events, like the scheduled one later
+            print(f"Ignoring event from source: {source} and detail-type: {detail_type}")
+            return {'statusCode': 200, 'body': 'Event ignored.'}
+
     except Exception as e:
-        print(f"FATAL: Error during main execution: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"statusCode": 500, "body": f"Error during scan: {e}"}
+        print(f"Error processing event: {e}")
+        # Log the error and return a 500
+        return {
+            'statusCode': 500,
+            'body': json.dumps(f"Internal server error: {str(e)}")
+        }
 
 
 # --- NEW: AUTHENTICATION FUNCTIONS (Replaces PAT) ---
