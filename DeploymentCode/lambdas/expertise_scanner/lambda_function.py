@@ -56,7 +56,7 @@ def lambda_handler(event, context):
             print("Processing a 'repository.added' event.")
             
             # The 'detail' field is a JSON string, so we need to load it
-            repo_details = json.loads(event['detail'])
+            repo_details = event['detail']
             
             installation_id = repo_details.get('installation_id')
             repo_name = repo_details.get('repo_name')
