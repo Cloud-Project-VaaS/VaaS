@@ -8,7 +8,7 @@ from datetime import datetime
 # Initialize clients
 secrets_client = boto3.client('secretsmanager')
 dynamodb = boto3.resource('dynamodb')
-eventbridge_client = boto3.client('eventbridge')  # <-- NEW
+eventbridge_client = boto3.client('events')  # <-- NEW
 table = dynamodb.Table('github-installations')
 
 # Load the Secret ARN from an Environment Variable
