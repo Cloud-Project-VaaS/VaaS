@@ -1,7 +1,6 @@
 import json
 import boto3
 import requests
-# import getpass # --- DELETED ---
 from datetime import datetime, timedelta, timezone
 import time
 import asyncio
@@ -9,15 +8,14 @@ import httpx
 import re
 import os
 from botocore.config import Config
-
-# --- NEW: Imports for GitHub App Auth ---
 import jwt # PyJWT
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
-# --- 1. CONFIGURE THESE VALUES ---
+# --- 1. ENVIRONMENT & CONFIG ---
 LLM_MODEL_ID = os.environ.get("LLM_MODEL_ID", "deepseek.v3-v1:0") 
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "ap-south-1") 
+SECRET_ARN = os.environ.get('SECRET_ARN') # <-- THIS MUST BE SET
 
 # --- 2. TUNING PARAMETERS ---
 ACTIVITY_THRESHOLD = 2
@@ -25,6 +23,7 @@ MAX_COMMITS_TO_FETCH_DETAILS = 30
 MAX_LLM_CONCURRENCY = 5
 MAX_BATCH_CONTRIBUTIONS = 25
 MAX_BATCH_SIZE = 3
+DAYS_TO_SCAN = 30 # How many days back to scan activity
 
 # --- 3. AWS CLIENTS (Global for Lambda re-use) ---
 connect_timeout = 10
@@ -34,78 +33,36 @@ boto_config = Config(
     read_timeout=read_timeout
 )
 bedrock_client = boto3.client('bedrock-runtime', region_name=BEDROCK_REGION, config=boto_config)
-# --- NEW: Clients for Secrets Manager and DynamoDB ---
 secrets_client = boto3.client('secretsmanager')
 dynamodb = boto3.resource('dynamodb')
 
+# --- 4. GITHUB APP AUTHENTICATION ---
 
-# --- NEW: LAMBDA HANDLER (Main Entrypoint) ---
-def lambda_handler(event, context):
-    
-    print("Event Received:")
-    print(json.dumps(event)) # Log the full event for debugging
-    
-    # 1. Parse the event from EventBridge
-    # The data we sent is in the 'detail' field.
+def load_secrets():
+    """Loads APP_ID and PRIVATE_KEY from AWS Secrets Manager."""
+    if not SECRET_ARN:
+        raise ValueError("Error: SECRET_ARN environment variable is not set.")
     try:
-        source = event.get('source')
-        detail_type = event.get('detail-type')
+        secret_response = secrets_client.get_secret_value(SecretId=SECRET_ARN)
+        secrets = json.loads(secret_response['SecretString'])
+        APP_ID = secrets.get('APP_ID')
+        PRIVATE_KEY = secrets.get('PRIVATE_KEY')
+        if not APP_ID or not PRIVATE_KEY:
+            raise KeyError("APP_ID or PRIVATE_KEY not found in secret.")
         
-        # Check if this is the event we expect
-        if source == "github.webhook.handler" and detail_type == "repository.added":
-            print("Processing a 'repository.added' event.")
-            
-            # The 'detail' field is a JSON string, so we need to load it
-            repo_details = event['detail']
-            
-            installation_id = repo_details.get('installation_id')
-            repo_name = repo_details.get('repo_name')
-            
-            if not installation_id or not repo_name:
-                print("Error: Event detail is missing installation_id or repo_name.")
-                return {'statusCode': 400, 'body': 'Missing key data in event detail.'}
-
-            print(f"Successfully parsed event for installation ID: {installation_id}")
-            print(f"Repository to scan: {repo_name}")
-
-            # --- YOUR MAIN LOGIC GOES HERE ---
-            # 2. Authenticate with the installation_id
-            # 3. Get the list of contributors for repo_name
-            # 4. Run your two-pass prompt analysis on them
-            # 5. Save the results (e.g., to S3 or another DynamoDB table)
-            
-            # For now, we'll just return a success message
-            message = f"Successfully received event for repo: {repo_name}"
-            return {'statusCode': 200, 'body': message}
-
-        else:
-            # This will handle other events, like the scheduled one later
-            print(f"Ignoring event from source: {source} and detail-type: {detail_type}")
-            return {'statusCode': 200, 'body': 'Event ignored.'}
-
+        # Convert APP_ID from string to int if necessary, as GH API expects int
+        return str(APP_ID), PRIVATE_KEY
     except Exception as e:
-        print(f"Error processing event: {e}")
-        # Log the error and return a 500
-        return {
-            'statusCode': 500,
-            'body': json.dumps(f"Internal server error: {str(e)}")
-        }
+        print(f"Error loading secrets: {e}")
+        raise
 
-
-# --- NEW: AUTHENTICATION FUNCTIONS (Replaces PAT) ---
-
-# --- MODIFIED: Function now accepts app_id ---
 def create_app_jwt(private_key_pem, app_id):
     """Creates a short-lived JWT (10 min) to authenticate as the GitHub App."""
-    
-    # --- DELETED: Hardcoded APP_ID ---
-    # APP_ID = "YOUR_GITHUB_APP_ID" 
-    
     now = int(time.time())
     payload = {
         'iat': now - 60,       # Issued at time (60s in the past)
         'exp': now + (10 * 60),  # Expiration time (10 minutes)
-        'iss': app_id          # --- MODIFIED: Use app_id from argument
+        'iss': app_id          # Issuer (your App ID)
     }
     
     try:
@@ -119,24 +76,18 @@ def create_app_jwt(private_key_pem, app_id):
         print(f"Error encoding JWT: {e}")
         raise
 
-# --- MODIFIED: Function now accepts app_id ---
 def get_installation_access_token(installation_id, private_key_pem, app_id):
     """Exchanges the App JWT for a temporary installation token."""
-    
-    # --- MODIFIED: Pass app_id to create_app_jwt ---
     app_jwt = create_app_jwt(private_key_pem, app_id)
-    
     headers = {
         "Authorization": f"Bearer {app_jwt}",
         "Accept": "application/vnd.github.v3+json"
     }
-    
     url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
     
     try:
         response = requests.post(url, headers=headers)
-        response.raise_for_status() # Will raise error if auth fails
-        
+        response.raise_for_status()
         data = response.json()
         print("Successfully generated new installation access token.")
         return data.get('token')
@@ -146,9 +97,61 @@ def get_installation_access_token(installation_id, private_key_pem, app_id):
             print(f"Response body: {e.response.text}")
         raise
 
-# --- 4. PREPROCESSING & CLEANING ---
-# (All your helper functions from here are UNCHANGED, except 'main')
+# --- 5. LAMBDA HANDLER (THE MAIN ENTRYPOINT) ---
 
+def lambda_handler(event, context):
+    
+    print("Event Received:")
+    print(json.dumps(event))
+    
+    try:
+        # --- A. Parse the EventBridge event ---
+        source = event.get('source')
+        detail_type = event.get('detail-type')
+        
+        if source == "github.webhook.handler" and detail_type == "repository.added":
+            print("Processing a 'repository.added' event.")
+            
+            repo_details = event['detail'] # This is a dict
+            installation_id = repo_details.get('installation_id')
+            repo_name = repo_details.get('repo_name')
+            
+            if not installation_id or not repo_name:
+                print("Error: Event detail is missing installation_id or repo_name.")
+                return {'statusCode': 400, 'body': 'Missing key data in event detail.'}
+
+            print(f"Successfully parsed event for installation ID: {installation_id}, Repo: {repo_name}")
+
+            # --- B. Load Secrets & Authenticate ---
+            print("Loading secrets from Secrets Manager...")
+            APP_ID, PRIVATE_KEY = load_secrets()
+            
+            print("Generating JWT and getting installation token...")
+            install_token = get_installation_access_token(installation_id, PRIVATE_KEY, APP_ID)
+
+            # --- C. Run the Main Analysis Logic ---
+            print(f"Starting async main analysis for {repo_name}...")
+            # We run the async main function from our sync handler
+            asyncio.run(main(repo_name, install_token, DAYS_TO_SCAN))
+            
+            message = f"Successfully processed {repo_name} and saved results to DynamoDB."
+            print(message)
+            return {'statusCode': 200, 'body': message}
+
+        else:
+            print(f"Ignoring event from source: {source} and detail-type: {detail_type}")
+            return {'statusCode': 200, 'body': 'Event ignored.'}
+
+    except Exception as e:
+        print(f"Error processing event: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'statusCode': 500,
+            'body': json.dumps(f"Internal server error: {str(e)}")
+        }
+
+# --- 6. PREPROCESSING & CLEANING ---
 def clean_text(text):
     if not text:
         return ""
@@ -158,7 +161,7 @@ def clean_text(text):
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
-# --- 5. GITHUB DATA FETCHING ---
+# --- 7. GITHUB DATA FETCHING ---
 
 def _run_search_query(search_query, headers):
     all_items = []
@@ -183,7 +186,7 @@ def _run_search_query(search_query, headers):
                 break
             
             params['page'] += 1
-            time.sleep(1)
+            time.sleep(1) # Be nice to the API
 
         except requests.exceptions.RequestException as e:
             print(f"Warning: Failed to fetch search results. Error: {e}")
@@ -191,10 +194,9 @@ def _run_search_query(search_query, headers):
             
     return all_items
 
-def get_github_activity(repo_name, pat, days_to_scan=30):
-    # --- MODIFIED: 'pat' is now the installation token ---
+def get_github_activity(repo_name, install_token, days_to_scan):
     auth_headers = {
-        "Authorization": f"Bearer {pat}", 
+        "Authorization": f"Bearer {install_token}", 
         "Accept": "application/vnd.github.v3+json"
     }
     
@@ -214,7 +216,7 @@ def get_github_activity(repo_name, pat, days_to_scan=30):
     user_activity_map = {}
 
     def add_compressed_activity(username, item, item_type, role):
-        if not username or "bot" in username:
+        if not username or "bot" in username.lower():
             return
             
         cleaned_title = clean_text(item.get('title'))
@@ -249,8 +251,7 @@ def get_github_activity(repo_name, pat, days_to_scan=30):
     print(f"Fetched and compressed PR/Issue activity for {len(user_activity_map)} contributors.")
     return user_activity_map
 
-# --- 6. ASYNC PROFILE & COMMIT FETCHING (REFACTORED) ---
-# (No changes in this section)
+# --- 8. ASYNC PROFILE & COMMIT FETCHING ---
 async def fetch_repo_languages(client, repo_name, headers):
     print(f"Fetching repo languages for {repo_name}...")
     url = f"https://api.github.com/repos/{repo_name}/languages"
@@ -327,8 +328,7 @@ async def fetch_commit_details_concurrently(commit_shas, repo_name, headers):
         
     return list(all_files)
 
-# --- 7. PYTHON-BASED FILTERING & SORTING ---
-# (No changes in this section)
+# --- 9. PYTHON-BASED FILTERING & SORTING ---
 def preprocess_and_filter(user_activity_map):
     print("Preprocessing, filtering, and sorting users...")
     
@@ -373,8 +373,7 @@ def preprocess_and_filter(user_activity_map):
     print(f"Filtered {len(user_activity_map)} users. Found {len(active_users_with_data)} active contributors (>{ACTIVITY_THRESHOLD} contributions).")
     return final_profiles, active_users_with_data
 
-# --- 8. COMMIT COMPRESSION & DYNAMIC BATCHING ---
-# (No changes in this section)
+# --- 10. COMMIT COMPRESSION & DYNAMIC BATCHING ---
 def compress_commit_data(commit_messages, file_paths):
     cleaned_messages = [clean_text(msg) for msg in commit_messages]
     
@@ -433,7 +432,8 @@ def create_dynamic_batches(sorted_active_users, all_profiles, all_user_commits_d
         }
         current_batch_weight += count
         
-        for i in range(len(active_user_list) - 1, -1, -i):
+        # Iterate backwards to safely remove items while looping
+        for i in range(len(active_user_list) - 1, -1, -1):
             username_light = active_user_list[i]
             user_profile_light = all_profiles[username_light]
             count_light = user_profile_light['activity_summary']['total_contributions']
@@ -462,13 +462,11 @@ def create_dynamic_batches(sorted_active_users, all_profiles, all_user_commits_d
     print(f"Created {len(batches)} batches from {len(sorted_active_users)} users.")
     return batches
 
-# --- 9. PARALLEL LLM CALLS ---
-# (No changes in this section, it already reads prompts from files)
+# --- 11. PARALLEL LLM CALLS ---
 
 def load_prompt(filename):
     """Loads a prompt from a JSON file."""
     try:
-        # --- MODIFIED: Prompts must be in the same dir as lambda_function.py ---
         with open(filename, "r") as f:
             prompt_data = json.load(f)
             if "system_prompt_template" in prompt_data and isinstance(prompt_data["system_prompt_template"], list):
@@ -479,7 +477,6 @@ def load_prompt(filename):
             
     except FileNotFoundError:
         print(f"FATAL ERROR: Prompt file '{filename}' not found. Exiting.")
-        # This will fail the Lambda, which is correct.
         raise
     except json.JSONDecodeError:
         print(f"FATAL ERROR: Prompt file '{filename}' is not valid JSON. Exiting.")
@@ -613,21 +610,19 @@ def generate_team_structure_analysis(active_profiles, system_prompt):
         return {}
 
 
-# --- 10. MAIN ASYNC ORCHESTRATOR (REFACTORED) ---
+# --- 12. MAIN ASYNC ORCHESTRATOR ---
 
-# --- MODIFIED: 'main' now accepts args from lambda_handler ---
-async def main(repo_name, pat, days_to_scan=30):
+async def main(repo_name, install_token, days_to_scan):
+    """The main async function to run the full analysis."""
     try:
-        # --- DELETED: All 'input()' and 'getpass()' calls ---
-        
         start_time = time.time()
         
-        # --- Load Prompts (unchanged) ---
+        # --- Load Prompts ---
         pass_1_prompt_data = load_prompt("pass_1_prompt.json")
         pass_2_prompt_data = load_prompt("pass_2_prompt.json")
         
-        pass_1_prompt_template = "\n".join(pass_1_prompt_data["system_prompt_template"])
-        pass_2_prompt = "\n".join(pass_2_prompt_data["system_prompt"])
+        pass_1_prompt_template = pass_1_prompt_data["system_prompt_template"]
+        pass_2_prompt = pass_2_prompt_data["system_prompt"]
         
         llm_semaphore = asyncio.Semaphore(MAX_LLM_CONCURRENCY)
 
@@ -636,8 +631,7 @@ async def main(repo_name, pat, days_to_scan=30):
                 return await asyncio.to_thread(invoke_llm_batch, batch, prompt_template)
         
         # --- PASS 0: Fetch & Preprocess (Python) ---
-        # --- MODIFIED: Uses args passed to 'main' ---
-        user_activity_map = get_github_activity(repo_name, pat, days_to_scan=days_to_scan)
+        user_activity_map = get_github_activity(repo_name, install_token, days_to_scan)
         
         if not user_activity_map:
             print("No activity found. Exiting.")
@@ -648,12 +642,11 @@ async def main(repo_name, pat, days_to_scan=30):
         
         if not final_profiles:
             print(f"No active contributors found with >{ACTIVITY_THRESHOLD} contributions. Exiting.")
-            return # This will end the Lambda run successfully
+            return
             
         # --- PASS 0.2: Fetch All Data for ALL active users (Async) ---
-        # --- MODIFIED: Uses 'pat' token passed to 'main' ---
         auth_headers = {
-            "Authorization": f"Bearer {pat}",
+            "Authorization": f"Bearer {install_token}",
             "Accept": "application/vnd.github.v3+json",
             "X-GitHub-Api-Version": "2022-11-28"
         }
@@ -682,7 +675,7 @@ async def main(repo_name, pat, days_to_scan=30):
                 asyncio.gather(*commit_list_tasks)
             )
             
-            # --- Process results (unchanged) ---
+            # --- Process results ---
             for username in final_profiles:
                 final_profiles[username]["repo_context"]["languages"] = repo_languages
             
@@ -752,8 +745,6 @@ async def main(repo_name, pat, days_to_scan=30):
                             "confidence": inferences.get("confidence", "Low")
                         }
                         final_profiles[username].update(inferences)
-
-        # --- DELETED: All 'print()' and 'open().write()' calls for expertise_profiles.json ---
         
         # --- PASS 2: Team Structure (Python + 1 LLM Call) ---
         print("\n" + "="*50)
@@ -780,9 +771,7 @@ async def main(repo_name, pat, days_to_scan=30):
             "inferred_hierarchy": llm_team_analysis.get("inferred_hierarchy", {})
         }
         
-        # --- DELETED: All 'print()' and 'open().write()' calls for team_structure.json ---
-
-        # --- NEW: Assemble Final Output and Save to DynamoDB ---
+        # --- PASS 3: Assemble Final Output and Save to DynamoDB ---
         print("Assembling final item for DynamoDB...")
         
         final_output_item = {
@@ -793,31 +782,20 @@ async def main(repo_name, pat, days_to_scan=30):
         }
         
         try:
-            # !! ACTION REQUIRED: Create a DynamoDB table named 'RepoExpertise' !!
-            # The global 'dynamodb' resource was created at the top
-            table = dynamodb.Table('RepoExpertise') # <-- YOUR NEW TABLE
-            
+            # Assumes a DynamoDB table named 'RepoExpertise' exists
+            table = dynamodb.Table('RepoExpertise')
             table.put_item(Item=final_output_item)
-            
             print(f"Successfully saved expertise map for '{repo_name}' to DynamoDB.")
             
         except Exception as e:
             print(f"ERROR: Failed to save to DynamoDB. Error: {e}")
-            # Re-raise the exception so the Lambda fails and we know about it
             raise e
 
         end_time = time.time()
         print(f"\n--- Total execution time: {end_time - start_time:.2f} seconds ---")
-        # No return needed from main()
 
     except Exception as e:
         print(f"\nAn unexpected error occurred in main: {e}")
         import traceback
         traceback.print_exc()
-        # Re-raise to fail the Lambda
-        raise
-
-# --- DELETED: The old entrypoint ---
-# if __name__ == "__main__":
-#     asyncio.run(main())
-
+        raise e
