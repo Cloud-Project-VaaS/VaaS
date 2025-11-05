@@ -75,7 +75,7 @@ def create_app_jwt(private_key_pem, app_id):
             password=None,
             backend=default_backend()
         )
-        return jwt.encode(payload, private_key, algorithm='RS265')
+        return jwt.encode(payload, private_key, algorithm='RS256')
     except Exception as e:
         print(f"Error encoding JWT: {e}")
         raise
