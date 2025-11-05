@@ -70,6 +70,11 @@ def _run_search_query(search_query, headers):
     print(f"  - Running search for: {search_query}")
 
     while True:
+        # --- MODIFIED: Stop at page 10 to avoid GitHub 422 error ---
+        if params['page'] > 10:
+            print(f"  - Reached page 10 (1000 results). Stopping search to avoid API error.")
+            break
+            
         try:
             response = requests.get(url, headers=headers, params=params)
             response.raise_for_status()
@@ -104,7 +109,8 @@ def get_github_activity(repo_name, pat, days_to_scan=30):
     if '/' not in repo_name:
         raise ValueError("Invalid repo_name format. Expected 'owner/repo'.")
         
-    since_date = (datetime.now(timezone.utc) - timedelta(days=days_to_scan)).isoformat()
+    # --- MODIFIED: Removed microseconds from the date ---
+    since_date = (datetime.now(timezone.utc) - timedelta(days=days_to_scan)).replace(microsecond=0).isoformat()
     
     print(f"Fetching data for {repo_name} (last {days_to_scan} days) using Search API...")
     
