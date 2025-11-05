@@ -1,0 +1,89 @@
+{
+  "active_teams": {
+    "ml_compiler_team": [
+      "Venkat6871",
+      "pschuh",
+      "ezhulenev",
+      "jcai19",
+      "hhb",
+      "chsigg",
+      "akuegel",
+      "thomasjoerg",
+      "felixwqp",
+      "GleasonK",
+      "majiddadashi",
+      "pifon2a",
+      "mrguenther",
+      "ghpvnist",
+      "subhankarshah"
+    ],
+    "gpu_performance_team": [
+      "Venkat6871",
+      "gaikwadrahul8",
+      "pschuh",
+      "ezhulenev",
+      "gbaned",
+      "chsigg",
+      "akuegel",
+      "thomasjoerg",
+      "felixwqp",
+      "metaflow"
+    ],
+    "build_infrastructure_team": [
+      "quoctruong",
+      "gbaned",
+      "meteorcloudy",
+      "majnemer",
+      "jparkerh"
+    ],
+    "platform_compatibility_team": [
+      "gaikwadrahul8",
+      "penpornk",
+      "qukhan",
+      "majnemer",
+      "yangustc07"
+    ],
+    "quantization_optimization_team": [
+      "Venkat6871",
+      "majiddadashi"
+    ],
+    "testing_documentation_team": [
+      "ILCSFNO",
+      "SandSnip3r",
+      "ghpvnist"
+    ]
+  },
+  "inferred_hierarchy": {
+    "leads": [
+      "Venkat6871",
+      "pschuh",
+      "ezhulenev",
+      "gbaned"
+    ],
+    "engineers": [
+      "gaikwadrahul8",
+      "quoctruong",
+      "jcai19",
+      "penpornk",
+      "hhb",
+      "chsigg",
+      "akuegel",
+      "thomasjoerg",
+      "felixwqp",
+      "GleasonK",
+      "majiddadashi",
+      "SandSnip3r",
+      "pifon2a",
+      "mrguenther",
+      "meteorcloudy",
+      "ghpvnist",
+      "qukhan",
+      "majnemer",
+      "subhankarshah",
+      "jparkerh",
+      "yangustc07",
+      "metaflow",
+      "ILCSFNO"
+    ]
+  }
+}

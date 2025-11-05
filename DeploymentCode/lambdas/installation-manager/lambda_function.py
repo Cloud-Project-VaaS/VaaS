@@ -2,22 +2,19 @@ import json
 import boto3
 import hmac
 import hashlib
-import os  # <-- Import the os module
+import os
 from datetime import datetime
 
 # Initialize clients
 secrets_client = boto3.client('secretsmanager')
 dynamodb = boto3.resource('dynamodb')
+eventbridge_client = boto3.client('eventbridge')  # <-- NEW
 table = dynamodb.Table('github-installations')
 
-# --- THIS IS THE CHANGE ---
 # Load the Secret ARN from an Environment Variable
-# We will set this variable in the Lambda console.
 SECRET_ARN = os.environ.get('SECRET_ARN') 
 if not SECRET_ARN:
-    # This will stop the function if the variable is not set
     raise ValueError("Error: SECRET_ARN environment variable is not set.")
-# --- END OF CHANGE ---
 
 # Load the Webhook Secret from Secrets Manager
 secret = secrets_client.get_secret_value(SecretId=SECRET_ARN)
@@ -57,15 +54,15 @@ def lambda_handler(event, context):
         if not installation_id:
             return {'statusCode': 200, 'body': 'No installation ID, nothing to do.'}
             
-        # 3. Add or Remove from DynamoDB using the composite key
+        # 3. Add or Remove from DynamoDB
         
-        # Use 'repositories_added' key if it exists, otherwise fall back to 'repositories'
         if action == 'created' or action == 'added':
             repos_list = payload.get('repositories_added', payload.get('repositories', []))
             for repo in repos_list:
                 repo_name = repo.get('full_name')
                 if repo_name:
                     print(f"Adding repo: {repo_name} for install: {installation_id}")
+                    # 1. Save to DynamoDB (your existing code)
                     table.put_item(
                         Item={
                             'installation_id': installation_id,
@@ -73,15 +70,29 @@ def lambda_handler(event, context):
                             'created_at': datetime.utcnow().isoformat()
                         }
                     )
-        
-        # Use 'repositories_removed' key if it exists, otherwise fall back to 'repositories'
+                    
+                    # 2. Send event to EventBridge (THE NEW PART) <-- NEW
+                    print(f"Sending 'repo.added' event for {repo_name} to EventBridge")
+                    eventbridge_client.put_events(
+                        Entries=[
+                            {
+                                'Source': 'github.webhook.handler',
+                                'DetailType': 'repository.added',
+                                'EventBusName': 'github-app-events', # <-- Use the bus name from Step 1
+                                'Detail': json.dumps({
+                                    'installation_id': installation_id,
+                                    'repo_name': repo_name
+                                })
+                            }
+                        ]
+                    )
+
         elif action == 'deleted' or action == 'removed':
             repos_list = payload.get('repositories_removed', payload.get('repositories', []))
             for repo in repos_list:
                 repo_name = repo.get('full_name')
                 if repo_name:
                     print(f"Removing repo: {repo_name} for install: {installation_id}")
-                    # Now we delete the specific repo entry using the composite key
                     table.delete_item(
                         Key={
                             'installation_id': installation_id,
@@ -97,4 +108,3 @@ def lambda_handler(event, context):
     except Exception as e:
         print(f"Error processing webhook: {e}")
         return {'statusCode': 500, 'body': 'Internal server error'}
-
