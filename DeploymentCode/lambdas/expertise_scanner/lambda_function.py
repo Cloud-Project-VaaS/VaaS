@@ -248,6 +248,32 @@ def get_github_activity(repo_name, install_token, days_to_scan):
             assignee_username = assignee.get('login') if assignee else None
             add_compressed_activity(assignee_username, pr, "pull_request", "assignee")
 
+    # --- NEW SECTION: Fetch all contributors as a fallback ---
+    print(f"Fetching full contributor list for {repo_name} as fallback...")
+    try:
+        contrib_url = f"https://api.github.com/repos/{repo_name}/contributors"
+        # We ask for anon=false to ensure we only get logged-in users
+        params = {'anon': 'false', 'per_page': 100}
+        
+        response = requests.get(contrib_url, headers=auth_headers, params=params)
+        response.raise_for_status()
+        contributors = response.json()
+        
+        for contributor in contributors:
+            username = contributor.get('login')
+            if not username or "bot" in username.lower():
+                continue
+            
+            # If they are not already in our map from PRs/Issues, add them.
+            if username not in user_activity_map:
+                user_activity_map[username] = [] # Initialize with empty activity
+                
+        print(f"Found {len(contributors)} total contributors. Map now has {len(user_activity_map)} users.")
+        
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Could not fetch contributor list. Error: {e}")
+    # --- END OF NEW SECTION ---
+
     print(f"Fetched and compressed PR/Issue activity for {len(user_activity_map)} contributors.")
     return user_activity_map
 
@@ -338,13 +364,16 @@ def preprocess_and_filter(user_activity_map):
     for username, activity_list in user_activity_map.items():
         count = len(activity_list)
         
-        if count <= ACTIVITY_THRESHOLD:
-            continue
-            
+        # --- MODIFIED LOGIC: Don't filter out users with 0 PRs/Issues ---
+        # We now keep them, as they might have commit data.
         if count > 15:
             role = "Core Maintainer"
-        else:
+        elif count > ACTIVITY_THRESHOLD:
             role = "Active Contributor"
+        else:
+            # This user might be commit-only, we'll check their commits next
+            role = "Contributor" 
+        # --- END OF MODIFIED LOGIC ---
         
         final_profiles[username] = {
             "username": username,
@@ -370,7 +399,8 @@ def preprocess_and_filter(user_activity_map):
         reverse=True
     )
     
-    print(f"Filtered {len(user_activity_map)} users. Found {len(active_users_with_data)} active contributors (>{ACTIVITY_THRESHOLD} contributions).")
+    # --- MODIFIED PRINT STATEMENT ---
+    print(f"Found {len(user_activity_map)} total users. Processing all of them.")
     return final_profiles, active_users_with_data
 
 # --- 10. COMMIT COMPRESSION & DYNAMIC BATCHING ---
