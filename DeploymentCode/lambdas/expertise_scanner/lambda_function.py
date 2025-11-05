@@ -345,7 +345,8 @@ async def fetch_commit_details_concurrently(commit_shas, repo_name, headers):
         return []
         
     all_files = set()
-    async with httpx.AsyncClient(http2=True) as client:
+    # --- MODIFICATION: Removed http2=True ---
+    async with httpx.AsyncClient() as client:
         tasks = [fetch_one_commit_detail(client, sha, repo_name, headers) for sha in commit_shas]
         results = await asyncio.gather(*tasks)
     
@@ -684,7 +685,8 @@ async def main(repo_name, install_token, days_to_scan):
         
         all_user_commits_data = {}
 
-        async with httpx.AsyncClient(http2=True) as client:
+        # --- MODIFICATION: Removed http2=True ---
+        async with httpx.AsyncClient() as client:
             # 1. Fetch languages, profiles, and commit lists concurrently
             lang_task = fetch_repo_languages(client, repo_name, auth_headers)
             
