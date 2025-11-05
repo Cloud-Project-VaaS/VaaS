@@ -16,6 +16,9 @@ from cryptography.hazmat.backends import default_backend
 LLM_MODEL_ID = os.environ.get("LLM_MODEL_ID", "deepseek.v3-v1:0") 
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "ap-south-1") 
 SECRET_ARN = os.environ.get('SECRET_ARN') # <-- THIS MUST BE SET
+# --- NEW: Add table name as environment variable ---
+INSTALLATIONS_TABLE_NAME = os.environ.get("INSTALLATIONS_TABLE_NAME", "github-installations")
+EXPERTISE_TABLE_NAME = os.environ.get("EXPERTISE_TABLE_NAME", "RepoExpertise")
 
 # --- 2. TUNING PARAMETERS ---
 ACTIVITY_THRESHOLD = 2
@@ -53,9 +56,10 @@ def load_secrets():
         # Convert APP_ID from string to int if necessary, as GH API expects int
         return str(APP_ID), PRIVATE_KEY
     except Exception as e:
-        print(f"Error loading secrets: {e}")
+        print(f"Error getting installation token: {e}")
         raise
 
+# --- NEW FUNCTIONS: Add the missing auth helpers here ---
 def create_app_jwt(private_key_pem, app_id):
     """Creates a short-lived JWT (10 min) to authenticate as the GitHub App."""
     now = int(time.time())
@@ -71,23 +75,27 @@ def create_app_jwt(private_key_pem, app_id):
             password=None,
             backend=default_backend()
         )
-        return jwt.encode(payload, private_key, algorithm='RS256')
+        return jwt.encode(payload, private_key, algorithm='RS265')
     except Exception as e:
         print(f"Error encoding JWT: {e}")
         raise
 
 def get_installation_access_token(installation_id, private_key_pem, app_id):
     """Exchanges the App JWT for a temporary installation token."""
+    
     app_jwt = create_app_jwt(private_key_pem, app_id)
+    
     headers = {
         "Authorization": f"Bearer {app_jwt}",
         "Accept": "application/vnd.github.v3+json"
     }
+    
     url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
     
     try:
         response = requests.post(url, headers=headers)
-        response.raise_for_status()
+        response.raise_for_status() # Will raise error if auth fails
+        
         data = response.json()
         print("Successfully generated new installation access token.")
         return data.get('token')
@@ -105,13 +113,13 @@ def lambda_handler(event, context):
     print(json.dumps(event))
     
     try:
-        # --- A. Parse the EventBridge event ---
+        # --- ROUTER: Check what triggered the function ---
         source = event.get('source')
         detail_type = event.get('detail-type')
         
+        # --- TRIGGER 1: On-Install event from our first Lambda ---
         if source == "github.webhook.handler" and detail_type == "repository.added":
             print("Processing a 'repository.added' event.")
-            
             repo_details = event['detail'] # This is a dict
             installation_id = repo_details.get('installation_id')
             repo_name = repo_details.get('repo_name')
@@ -122,22 +130,33 @@ def lambda_handler(event, context):
 
             print(f"Successfully parsed event for installation ID: {installation_id}, Repo: {repo_name}")
 
-            # --- B. Load Secrets & Authenticate ---
+            # Load Secrets & Authenticate
             print("Loading secrets from Secrets Manager...")
             APP_ID, PRIVATE_KEY = load_secrets()
             
             print("Generating JWT and getting installation token...")
             install_token = get_installation_access_token(installation_id, PRIVATE_KEY, APP_ID)
 
-            # --- C. Run the Main Analysis Logic ---
+            # Run the Main Analysis Logic for ONE repo
             print(f"Starting async main analysis for {repo_name}...")
-            # We run the async main function from our sync handler
             asyncio.run(main(repo_name, install_token, DAYS_TO_SCAN))
             
             message = f"Successfully processed {repo_name} and saved results to DynamoDB."
             print(message)
             return {'statusCode': 200, 'body': message}
 
+        # --- TRIGGER 2: Scheduled 7-day event ---
+        elif source == "aws.events" and detail_type == "Scheduled Event":
+            print("Processing a 'Scheduled Event' for a full weekly scan.")
+            
+            # Run the full scan logic
+            asyncio.run(run_full_scan())
+            
+            message = "Successfully completed full scheduled scan."
+            print(message)
+            return {'statusCode': 200, 'body': message}
+
+        # --- Default: Unknown trigger ---
         else:
             print(f"Ignoring event from source: {source} and detail-type: {detail_type}")
             return {'statusCode': 200, 'body': 'Event ignored.'}
@@ -150,6 +169,79 @@ def lambda_handler(event, context):
             'statusCode': 500,
             'body': json.dumps(f"Internal server error: {str(e)}")
         }
+
+# --- NEW: Full Scan Orchestrator ---
+def get_all_installed_repos():
+    """Scans the DynamoDB table to get all installation/repo pairs."""
+    table = dynamodb.Table(INSTALLATIONS_TABLE_NAME)
+    repos_by_install_id = {}
+    
+    try:
+        # Use scan for simplicity. For >1MB tables, pagination would be needed.
+        response = table.scan()
+        items = response.get('Items', [])
+        
+        # Handle pagination if the table grows
+        while 'LastEvaluatedKey' in response:
+            print("Paginating DynamoDB scan...")
+            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
+            items.extend(response.get('Items', []))
+
+        print(f"Found {len(items)} items in {INSTALLATIONS_TABLE_NAME} table.")
+        
+        # Group repos by installation_id to minimize auth calls
+        for item in items:
+            install_id = item.get('installation_id')
+            repo_name = item.get('repo_name')
+            if install_id and repo_name:
+                if install_id not in repos_by_install_id:
+                    repos_by_install_id[install_id] = []
+                repos_by_install_id[install_id].append(repo_name)
+        
+        return repos_by_install_id
+
+    except Exception as e:
+        print(f"Error scanning DynamoDB table: {e}")
+        return {}
+
+async def run_full_scan():
+    """
+    Orchestrates a full scan of all repos in the DynamoDB table.
+    Gets one token per installation and scans all its repos.
+    """
+    print("Loading secrets for full scan...")
+    APP_ID, PRIVATE_KEY = load_secrets()
+    
+    print("Fetching all installed repos from DynamoDB...")
+    repos_by_install_id = get_all_installed_repos()
+    
+    if not repos_by_install_id:
+        print("No repos found in DynamoDB. Exiting scan.")
+        return
+
+    tasks = []
+    print(f"Found {len(repos_by_install_id)} unique installations. Generating tokens and creating tasks...")
+    
+    for install_id, repo_list in repos_by_install_id.items():
+        try:
+            print(f"Getting token for installation {install_id}...")
+            token = get_installation_access_token(install_id, PRIVATE_KEY, APP_ID)
+            
+            # Create a task for each repo under this installation
+            for repo_name in repo_list:
+                print(f"  - Queuing analysis for {repo_name}")
+                tasks.append(main(repo_name, token, DAYS_TO_SCAN))
+                
+        except Exception as e:
+            print(f"Failed to get token for installation {install_id}. Skipping {len(repo_list)} repos. Error: {e}")
+            
+    if not tasks:
+        print("No valid tasks to run. Exiting scan.")
+        return
+        
+    print(f"--- Starting concurrent analysis for {len(tasks)} total repositories ---")
+    await asyncio.gather(*tasks)
+    print(f"--- Finished concurrent analysis for all repositories ---")
 
 # --- 6. PREPROCESSING & CLEANING ---
 def clean_text(text):
@@ -815,7 +907,7 @@ async def main(repo_name, install_token, days_to_scan):
         
         try:
             # Assumes a DynamoDB table named 'RepoExpertise' exists
-            table = dynamodb.Table('RepoExpertise')
+            table = dynamodb.Table(EXPERTISE_TABLE_NAME)
             table.put_item(Item=final_output_item)
             print(f"Successfully saved expertise map for '{repo_name}' to DynamoDB.")
             
