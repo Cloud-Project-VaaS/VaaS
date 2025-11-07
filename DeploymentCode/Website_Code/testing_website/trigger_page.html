@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-gray-900">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pipeline Test Trigger</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        document.documentElement.classList.add('dark');
+    </script>
+</head>
+<body class="h-full flex items-center justify-center bg-gray-900 text-gray-200 p-4">
+
+    <div class="w-full max-w-md bg-gray-800 rounded-lg shadow-xl p-8">
+        <h1 class="text-3xl font-bold text-center text-white mb-6">GitHub Issue Pipeline</h1>
+        
+        <p class="text-center text-gray-400 mb-6">
+            Enter the password and click the button to manually trigger the 
+            <code>fetch-and-classify-issues</code> Lambda.
+        </p>
+
+        <div class="space-y-4">
+            <!-- Password Input -->
+            <div>
+                <label for="password" class="block text-sm font-medium text-gray-300">Password</label>
+                <input type="password" id="password" name="password" class="mt-1 block w-full bg-gray-700 border border-gray-600 rounded-md shadow-sm py-2 px-3 text-white focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="Enter test password">
+            </div>
+            
+            <!-- Trigger Button -->
+            <button id="triggerButton" class="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-500 disabled:cursor-not-allowed">
+                Trigger Pipeline Run
+            </button>
+            
+            <!-- Status Message Area -->
+            <div id="statusMessage" class="text-center text-sm min-h-[20px]">&nbsp;</div>
+        </div>
+    </div>
+
+    <script>
+        const triggerButton = document.getElementById('triggerButton');
+        const passwordInput = document.getElementById('password');
+        const statusMessage = document.getElementById('statusMessage');
+
+        async function handleTrigger() {
+            const password = passwordInput.value;
+            if (!password) {
+                showMessage("Please enter the password.", "error");
+                return;
+            }
+
+            // Disable button and show loading
+            triggerButton.disabled = true;
+            triggerButton.textContent = 'Triggering...';
+            showMessage("", "loading");
+
+            try {
+                const response = await fetch('/trigger-pipeline', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ password: password }),
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    showMessage(data.message, "success");
+                    // Start client-side cooldown (visual only, server enforces)
+                    startCooldown(300); // 300 seconds
+                } else {
+                    showMessage(data.message || "An unknown error occurred.", "error");
+                    triggerButton.disabled = false;
+                    triggerButton.textContent = 'Trigger Pipeline Run';
+                }
+
+            } catch (error) {
+                showMessage("Failed to connect to the server.", "error");
+                triggerButton.disabled = false;
+                triggerButton.textContent = 'Trigger Pipeline Run';
+            }
+        }
+
+        function startCooldown(seconds) {
+            triggerButton.disabled = true;
+            let remaining = seconds;
+            triggerButton.textContent = `Cooldown... (${remaining}s)`;
+            
+            const interval = setInterval(() => {
+                remaining--;
+                if (remaining > 0) {
+                    triggerButton.textContent = `Cooldown... (${remaining}s)`;
+                } else {
+                    clearInterval(interval);
+                    triggerButton.disabled = false;
+                    triggerButton.textContent = 'Trigger Pipeline Run';
+                    showMessage("Ready to trigger again.", "success");
+                }
+            }, 1000);
+        }
+
+        function showMessage(message, type) {
+            statusMessage.textContent = message;
+            statusMessage.classList.remove('text-green-400', 'text-red-400', 'text-gray-400');
+            
+            if (type === 'success') {
+                statusMessage.classList.add('text-green-400');
+            } else if (type === 'error') {
+                statusMessage.classList.add('text-red-400');
+            } else {
+                statusMessage.classList.add('text-gray-400');
+            }
+        }
+
+        triggerButton.addEventListener('click', handleTrigger);
+    </script>
+</body>
+</html>
