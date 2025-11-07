@@ -30,7 +30,7 @@ IssueOps is a GitHub App that automates repository triage and routing with zero 
 
 2. On the GitHub page:
    - Click **Install**.
-   - Choose **Only select repositories**.
+   - Choose **"Only select repositories"**.
    - Select the repository (or repositories) you want the app to manage.
    - Click **Install** to confirm.
 
