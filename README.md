@@ -38,8 +38,8 @@ That is all. The app will start working automatically on the selected repository
 
 
 ### 📊 Dashboard / Metrics
-You can view all collected metrics and repository insights on the dashboard:  
-👉 **[Visit Dashboard](https://<your-dashboard-url>)**
+You can view all collected metrics and repository insights on the dashboard. Some metrics are still under development and may not be fully implemented yet:  
+👉 **[Visit Dashboard](http://13.127.133.1:5000)**
 
 The dashboard provides a comprehensive view of your repository’s activity, including:
 
