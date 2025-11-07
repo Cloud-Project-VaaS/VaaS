@@ -5,8 +5,6 @@ from typing import Dict, Any, List
 from datetime import datetime, timezone
 
 # --- AWS SDK (Boto3) ---
-# This is included in the base Lambda container image,
-# but it's good practice to add 'boto3' to your requirements.txt
 import boto3
 
 # --- Your Custom Model Logic (UNCHANGED) ---
@@ -91,47 +89,49 @@ def lambda_handler(event: Dict[str, Any], context: Any):
     
     table = dynamodb.Table(ISSUES_TABLE_NAME)
     
-    # Use DynamoDB Batch Writer for maximum efficiency
-    with table.batch_writer() as batch:
-        for issue in issues_list:
-            try:
-                # 2. Extract data for this issue
-                issue_id = issue['issue_id']
-                # Use the ENRICHED title/body if available, fall back to original
-                title = issue.get('enriched_title', issue.get('title', '')).strip()
-                body = issue.get('enriched_body', issue.get('body', '')).strip()
-                
-                text_content = f"{title}\n\n{body}".strip()
-                
-                # 3. Classify the issue using your model
-                if not text_content:
-                    prediction = {"category": "Question", "scores": {"Bug": 0.0, "Enhancement": 0.0, "Question": 1.0}}
-                else:
-                    prediction = _predict_probabilities(text_content)
-                
-                issue_type = prediction.get("category", "Question") # Get the top category
-                print(f"  - Result for {repo_name}#{issue_id}: {issue_type}")
+    # --- FIX: Removed the 'with table.batch_writer() as batch:' line ---
+    
+    for issue in issues_list:
+        try:
+            # 2. Extract data for this issue
+            issue_id = issue['issue_id']
+            # Use the ENRICHED title/body if available, fall back to original
+            title = issue.get('enriched_title', issue.get('title', '')).strip()
+            body = issue.get('enriched_body', issue.get('body', '')).strip()
+            
+            text_content = f"{title}\n\n{body}".strip()
+            
+            # 3. Classify the issue using your model
+            if not text_content:
+                prediction = {"category": "Question", "scores": {"Bug": 0.0, "Enhancement": 0.0, "Question": 1.0}}
+            else:
+                prediction = _predict_probabilities(text_content)
+            
+            issue_type = prediction.get("category", "Question") # Get the top category
+            print(f"  - Result for {repo_name}#{issue_id}: {issue_type}")
 
-                # 4. Update the item in DynamoDB
-                batch.update_item(
-                    Key={
-                        'repo_name': repo_name,
-                        'issue_id': issue_id
-                    },
-                    UpdateExpression="SET issue_type = :it, issue_type_scores = :its, last_updated_pipeline = :lu",
-                    ExpressionAttributeValues={
-                        ':it': issue_type,
-                        ':its': json.dumps(prediction.get("scores", {})), # Store all scores as a JSON string
-                        ':lu': datetime.now(timezone.utc).isoformat()
-                    }
-                )
-                
-                # Pass the classification to the next event
-                issue['issue_type'] = issue_type
+            # --- FIX: Changed 'batch.update_item' to 'table.update_item' ---
+            table.update_item(
+                Key={
+                    'repo_name': repo_name,
+                    'issue_id': issue_id
+                },
+                UpdateExpression="SET issue_type = :it, issue_type_scores = :its, last_updated_pipeline = :lu",
+                ExpressionAttributeValues={
+                    ':it': issue_type,
+                    # Store all scores as a JSON string
+                    # Use json.dumps to handle the float-to-Decimal conversion implicitly
+                    ':its': json.loads(json.dumps(prediction.get("scores", {})), parse_float=boto3.dynamodb.types.Decimal),
+                    ':lu': datetime.now(timezone.utc).isoformat()
+                }
+            )
+            
+            # Pass the classification to the next event
+            issue['issue_type'] = issue_type
 
-            except Exception as e:
-                print(f"ERROR: Failed to process issue {issue.get('issue_id')}: {e}")
-                continue # Skip this issue and continue with the next
+        except Exception as e:
+            print(f"ERROR: Failed to process issue {issue.get('issue_id')}: {e}")
+            continue # Skip this issue and continue with the next
     
     print(f"Successfully processed and updated {len(issues_list)} issues.")
     

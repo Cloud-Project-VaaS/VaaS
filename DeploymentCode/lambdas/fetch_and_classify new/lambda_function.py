@@ -33,139 +33,184 @@ def load_secrets():
         raise
 
 def create_app_jwt(private_key_pem, app_id):
-    """Creates a short-lived JWT (10 min) to authenticate as the GitHub App."""
+    """Creates a JSON Web Token (JWT) for GitHub App authentication."""
     try:
         payload = {
-            'iat': int(time.time()) - 60,
-            'exp': int(time.time()) + (10 * 60),
+            'iat': int(time.time()),
+            'exp': int(time.time()) + (10 * 60), # 10 minute expiration
             'iss': app_id
         }
+        # --- FIX: Changed 'RS260' to 'RS256' ---
         return jwt.encode(payload, private_key_pem, algorithm='RS256')
     except Exception as e:
-        print(f"Error encoding JWT: {e}")
+        print(f"Error creating JWT: {e}")
         raise
 
 def get_installation_access_token(installation_id, private_key_pem, app_id):
-    """Exchanges the App JWT for a temporary installation token."""
-    print(f"Getting token for installation {installation_id}...")
+    """Gets a temporary access token for a specific installation."""
+    app_jwt = create_app_jwt(private_key_pem, app_id)
+    headers = {
+        "Authorization": f"Bearer {app_jwt}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
+    
     try:
-        app_jwt = create_app_jwt(private_key_pem, app_id)
-        headers = {
-            "Authorization": f"Bearer {app_jwt}",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
         response = requests.post(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
-        print(f"Successfully generated new token for {installation_id}.")
-        return data.get('token')
-    except Exception as e:
-        print(f"Failed to get token for installation {installation_id}. Error: {e}")
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        token_data = response.json()
+        if 'token' not in token_data:
+            raise ValueError("Error: 'token' not found in response.")
+        return token_data['token']
+    except requests.exceptions.RequestException as e:
+        print(f"Error getting installation token: {e}")
         raise
+
+# --- Core Logic ---
 
 def get_all_installed_repos():
     """
-    Scans the installations table to get a list of all repos,
-    grouped by installation_id.
+    Scans the 'github-installations' table to get all repos,
+    grouped by their installation_id.
     """
     print(f"Fetching all installed repos from {INSTALLATIONS_TABLE_NAME}...")
     table = dynamodb.Table(INSTALLATIONS_TABLE_NAME)
+    
+    install_repo_map = {} # {install_id: [repo1, repo2]}
+    
     try:
-        response = table.scan()
+        response = table.scan(
+            ProjectionExpression="installation_id, repo_name"
+        )
         items = response.get('Items', [])
-        while 'LastEvaluatedKey' in response:
-            response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
-            items.extend(response.get('Items', []))
         
-        # Group repos by installation_id
-        install_repo_map = {}
+        while 'LastEvaluatedKey' in response:
+            response = table.scan(
+                ExclusiveStartKey=response['LastEvaluatedKey'],
+                ProjectionExpression="installation_id, repo_name"
+            )
+            items.extend(response.get('Items', []))
+
         for item in items:
-            install_id = item['installation_id']
+            install_id = int(item['installation_id']) # Ensure it's an int
             repo_name = item['repo_name']
             if install_id not in install_repo_map:
                 install_repo_map[install_id] = []
             install_repo_map[install_id].append(repo_name)
-            
+
         print(f"Found {len(items)} repos across {len(install_repo_map)} installations.")
         return install_repo_map
-        
-    except Exception as e:
-        print(f"Error scanning DynamoDB table {INSTALLATIONS_TABLE_NAME}: {e}")
-        return {}
 
-def fetch_new_issues(repo_name, auth_token):
-    """Fetches all open issues from a repo created in the last 70 minutes."""
-    print(f"  - Fetching new issues for {repo_name}...")
+    except Exception as e:
+        print(f"FATAL: Error scanning DynamoDB table {INSTALLATIONS_TABLE_NAME}: {e}")
+        raise
+
+def fetch_new_issues(repo_name, token):
+    """
+    Fetches all new issues for a single repo created in the last 70 minutes.
+    """
+    print(f"Fetching new issues for {repo_name}...")
     
-    # Go back 70 minutes to provide a 10-min overlap with the hourly run
+    # We look back 70 minutes to ensure we don't miss anything from the 1-hour schedule
     since_time = (datetime.now(timezone.utc) - timedelta(minutes=70)).isoformat()
     
     headers = {
-        "Authorization": f"Bearer {auth_token}",
-        "Accept": "application/vnd.github.v3+json"
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    # We query for issues *created* since the last run.
+    # We also explicitly ask for 'open' state.
+    params = {
+        'since': since_time,
+        'state': 'open',
+        'per_page': 100
     }
     url = f"https://api.github.com/repos/{repo_name}/issues"
-    params = {
-        "state": "open",
-        "since": since_time,
-        "per_page": 100
-    }
+    
+    new_issues = []
     
     try:
         response = requests.get(url, headers=headers, params=params)
         response.raise_for_status()
-        issues = response.json()
+        issues_data = response.json()
         
-        # Filter out Pull Requests (they also appear in the 'issues' endpoint)
-        new_issues = [iss for iss in issues if 'pull_request' not in iss]
-        print(f"  - Found {len(new_issues)} new issues for {repo_name}.")
-        return new_issues
-        
-    except Exception as e:
-        print(f"  - Error fetching issues for {repo_name}: {e}")
-        return []
+        if not issues_data:
+            print(f"  - No new issues found for {repo_name}.")
+            return []
 
-def save_issues_and_send_event(repo_name, issues_list):
-    """
-    Saves a batch of new issues to DynamoDB and sends an
-    EventBridge event to trigger the classification pipeline.
-    """
-    if not issues_list:
-        print(f"No new issues to save or send for {repo_name}.")
-        return
+        for issue in issues_data:
+            # We only care about issues, not pull requests
+            if 'pull_request' in issue:
+                continue
+                
+            # Only process issues *created* since the 'since' time.
+            # The 'since' param is for *updates*, so we must double-check creation.
+            created_at = datetime.fromisoformat(issue['created_at'])
+            if created_at < (datetime.now(timezone.utc) - timedelta(minutes=70)):
+                continue
 
-    table = dynamodb.Table(ISSUES_TABLE_NAME)
-    issues_for_event = []
-
-    print(f"Saving {len(issues_list)} issues to {ISSUES_TABLE_NAME}...")
-    with table.batch_writer() as batch:
-        for issue in issues_list:
-            issue_id = issue['id']
-            # Create the item to be stored
-            item_to_store = {
-                'installation_id': install_id,
-                'repo_name': repo_name,
-                'issue_id': issue_id,
-                'status': 'open',
+            # This is a brand new issue. Let's process it.
+            new_issues.append({
+                'issue_id': issue['number'],
                 'title': issue.get('title', ''),
                 'body': issue.get('body', ''),
-                'author_login': issue.get('user', {}).get('login', ''),
-                'created_at_github': issue.get('created_at'),
-                'last_updated_pipeline': datetime.now(timezone.utc).isoformat()
-                # We will add other fields (is_spam, priority, etc.) later
-            }
-            batch.put_item(Item=item_to_store)
-            
-            # Add a minimal version to the event payload
-            issues_for_event.append({
-                'issue_id': issue_id,
-                'title': item_to_store['title'],
-                'body': item_to_store['body'],
-                'author_login': item_to_store['author_login']
+                'author_login': issue.get('user', {}).get('login', '')
             })
+        
+        print(f"  - Found {len(new_issues)} new issue(s) for {repo_name}.")
+        return new_issues
 
-    # Send ONE event to EventBridge for this ENTIRE batch
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching issues for {repo_name}: {e}")
+        return [] # Return empty list on error, continue with next repo
+    except Exception as e:
+        print(f"Unexpected error processing issues for {repo_name}: {e}")
+        return []
+
+def save_issues_and_send_event(repo_name, issues_list, install_id): # <-- UPGRADED
+    """
+    Saves a batch of new issues to DynamoDB and sends an EventBridge event.
+    """
+    if not issues_list:
+        return # Nothing to do
+
+    table = dynamodb.Table(ISSUES_TABLE_NAME)
+    
+    # This list will be sent to EventBridge
+    event_issues_payload = []
+    
+    print(f"Saving {len(issues_list)} issues to DynamoDB for {repo_name}...")
+    
+    try:
+        with table.batch_writer() as batch:
+            for issue in issues_list:
+                
+                # --- UPGRADE: Add install_id to the issue object ---
+                # This is critical for the spam function to be able to get a token
+                issue['installation_id'] = install_id
+                
+                item_to_store = {
+                    'repo_name': repo_name, # Partition Key
+                    'issue_id': issue['issue_id'], # Sort Key
+                    'title': issue['title'],
+                    'body': issue['body'],
+                    'author_login': issue['author_login'],
+                    'status': 'new', # We set the initial status
+                    'pipeline_step': 'received',
+                    'created_at_github': datetime.now(timezone.utc).isoformat(),
+                    'last_updated_pipeline': datetime.now(timezone.utc).isoformat()
+                }
+                batch.put_item(Item=item_to_store)
+                
+                # Add the *full* issue payload (now with install_id) to the event list
+                event_issues_payload.append(issue)
+
+    except Exception as e:
+        print(f"ERROR: Failed to batch write to DynamoDB: {e}")
+        # If DB write fails, we should not send the event
+        return
+
+    # If DB save was successful, send the event
     print(f"Sending 'issue.batch.new' event for {repo_name} to EventBridge...")
     try:
         eventbridge_client.put_events(
@@ -173,16 +218,18 @@ def save_issues_and_send_event(repo_name, issues_list):
                 {
                     'Source': 'github.issues',
                     'DetailType': 'issue.batch.new',
-                    'EventBusName': 'default', # Using the default bus is fine
+                    'EventBusName': 'default',
                     'Detail': json.dumps({
                         'repo_name': repo_name,
-                        'issues': issues_for_event
+                        'issues': event_issues_payload # Send the list with install_id
                     })
                 }
             ]
         )
     except Exception as e:
         print(f"FATAL: Failed to send EventBridge event: {e}")
+        # This is bad, the next step in the pipeline will fail to trigger
+        # We might want to add retry logic here in a future version
         raise
 
 def lambda_handler(event, context):
@@ -195,27 +242,40 @@ def lambda_handler(event, context):
     if not SECRET_ARN or not INSTALLATIONS_TABLE_NAME or not ISSUES_TABLE_NAME:
         print("FATAL: Environment variables not set.")
         return
-
-    # 1. Get secrets
-    app_id, private_key_pem = load_secrets()
     
-    # 2. Get all repos grouped by installation
-    install_repo_map = get_all_installed_repos()
+    try:
+        # 1. Get secrets
+        app_id, private_key_pem = load_secrets()
+        
+        # 2. Get all repos grouped by installation
+        install_repo_map = get_all_installed_repos()
+    
+        if not install_repo_map:
+            print("No installations found in DynamoDB. Job complete.")
+            return
 
-    # 3. Process each installation
-    for install_id, repos in install_repo_map.items():
-        try:
-            # 4. Get ONE token for this installation
-            token = get_installation_access_token(install_id, private_key_pem, app_id)
-            
-            # 5. Process all repos for this installation
-            for repo_name in repos:
-                new_issues = fetch_new_issues(repo_name, token)
-                save_issues_and_send_event(repo_name, new_issues)
+        # 3. Process each installation
+        for install_id, repos in install_repo_map.items():
+            try:
+                # 4. Get ONE token for this installation
+                print(f"Processing installation {install_id} for {len(repos)} repo(s)...")
+                token = get_installation_access_token(install_id, private_key_pem, app_id)
                 
-        except Exception as e:
-            print(f"ERROR: Failed to process installation {install_id}. Skipping. Error: {e}")
-            continue # Skip to the next installation
+                # 5. Process all repos for this installation
+                for repo_name in repos:
+                    new_issues = fetch_new_issues(repo_name, token)
+                    # --- UPGRADE: Pass install_id to the save/send function ---
+                    save_issues_and_send_event(repo_name, new_issues, install_id)
+                    
+            except Exception as e:
+                print(f"ERROR: Failed to process installation {install_id}. Skipping. Error: {e}")
+                continue # Go to the next installation
 
-    print("Hourly issue fetch job complete.")
-    return {'statusCode': 200, 'body': 'Job complete.'}
+        print("Hourly issue fetch job complete.")
+        return {'statusCode': 200, 'body': 'Job complete.'}
+
+    except Exception as e:
+        print(f"FATAL: Unhandled exception in lambda_handler: {e}")
+        import traceback
+        traceback.print_exc()
+        return {'statusCode': 500, 'body': 'Internal server error'}

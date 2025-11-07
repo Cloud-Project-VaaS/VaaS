@@ -21,7 +21,7 @@ INSTALLATIONS_TABLE_NAME = os.environ.get("INSTALLATIONS_TABLE_NAME", "github-in
 EXPERTISE_TABLE_NAME = os.environ.get("EXPERTISE_TABLE_NAME", "RepoExpertise")
 
 # --- 2. TUNING PARAMETERS ---
-ACTIVITY_THRESHOLD = 2
+ACTIVITY_THRESHOLD = 2 # Min contributions to be "active" (from test_function.py)
 MAX_COMMITS_TO_FETCH_DETAILS = 30
 MAX_LLM_CONCURRENCY = 5
 MAX_BATCH_CONTRIBUTIONS = 25
@@ -447,7 +447,7 @@ async def fetch_commit_details_concurrently(commit_shas, repo_name, headers):
         
     return list(all_files)
 
-# --- 9. PYTHON-BASED FILTERING & SORTING ---
+# --- 9. PYTHON-BASED FILTERING & SORTING (UPDATED) ---
 def preprocess_and_filter(user_activity_map):
     print("Preprocessing, filtering, and sorting users...")
     
@@ -457,16 +457,17 @@ def preprocess_and_filter(user_activity_map):
     for username, activity_list in user_activity_map.items():
         count = len(activity_list)
         
-        # --- MODIFIED LOGIC: Don't filter out users with 0 PRs/Issues ---
-        # We now keep them, as they might have commit data.
+        # --- NEW FILTER ADDED (from test_function.py) ---
+        # Skip user if they are inactive (<= 2 contributions)
+        if count <= ACTIVITY_THRESHOLD:
+            continue
+        # --- END OF NEW FILTER ---
+        
+        # --- User is ACTIVE if we reach this point ---
         if count > 15:
             role = "Core Maintainer"
-        elif count > ACTIVITY_THRESHOLD:
-            role = "Active Contributor"
         else:
-            # This user might be commit-only, we'll check their commits next
-            role = "Contributor" 
-        # --- END OF MODIFIED LOGIC ---
+            role = "Active Contributor" 
         
         final_profiles[username] = {
             "username": username,
@@ -493,7 +494,7 @@ def preprocess_and_filter(user_activity_map):
     )
     
     # --- MODIFIED PRINT STATEMENT ---
-    print(f"Found {len(user_activity_map)} total users. Processing all of them.")
+    print(f"Filtered {len(user_activity_map)} total users. Found {len(active_users_with_data)} active contributors (>{ACTIVITY_THRESHOLD} contributions).")
     return final_profiles, active_users_with_data
 
 # --- 10. COMMIT COMPRESSION & DYNAMIC BATCHING ---
@@ -590,6 +591,7 @@ def create_dynamic_batches(sorted_active_users, all_profiles, all_user_commits_d
 def load_prompt(filename):
     """Loads a prompt from a JSON file."""
     try:
+        # Prompts must be in the same directory as the lambda_function.py
         with open(filename, "r") as f:
             prompt_data = json.load(f)
             if "system_prompt_template" in prompt_data and isinstance(prompt_data["system_prompt_template"], list):
@@ -672,10 +674,10 @@ def invoke_llm_batch(batch_data, prompt_template_str):
         return {}
 
 
-def generate_team_structure_analysis(active_profiles, system_prompt):
-    print(f"\nSending {len(active_profiles)} active profiles to Bedrock LLM (Pass 2)...")
+def generate_team_structure_analysis(active_profiles_data, system_prompt):
+    print(f"\nSending {len(active_profiles_data)} active profiles to Bedrock LLM (Pass 2)...")
     
-    user_prompt = json.dumps(active_profiles, indent=2)
+    user_prompt = json.dumps(active_profiles_data, indent=2)
     
     body_obj = {}
     if "anthropic.claude" in LLM_MODEL_ID:
@@ -758,13 +760,33 @@ async def main(repo_name, install_token, days_to_scan):
         
         if not user_activity_map:
             print("No activity found. Exiting.")
-            return # This will end the Lambda run successfully
+            # Create an empty item in DynamoDB so we know we've scanned it
+            final_output_item = {
+                'repo_name': repo_name,
+                'last_updated': datetime.now(timezone.utc).isoformat(),
+                'expertise_profiles': {},
+                'team_structure': {}
+            }
+            table = dynamodb.Table(EXPERTISE_TABLE_NAME)
+            table.put_item(Item=final_output_item)
+            print(f"Saved empty item for '{repo_name}' to DynamoDB.")
+            return
 
         # --- PASS 0.1: Filter & Sort (Python) ---
         final_profiles, sorted_active_users = preprocess_and_filter(user_activity_map)
         
         if not final_profiles:
             print(f"No active contributors found with >{ACTIVITY_THRESHOLD} contributions. Exiting.")
+            # Create an empty item in DynamoDB
+            final_output_item = {
+                'repo_name': repo_name,
+                'last_updated': datetime.now(timezone.utc).isoformat(),
+                'expertise_profiles': {},
+                'team_structure': {}
+            }
+            table = dynamodb.Table(EXPERTISE_TABLE_NAME)
+            table.put_item(Item=final_output_item)
+            print(f"Saved empty item for '{repo_name}' to DynamoDB as no active users were found.")
             return
             
         # --- PASS 0.2: Fetch All Data for ALL active users (Async) ---
@@ -868,27 +890,31 @@ async def main(repo_name, install_token, days_to_scan):
                             "contribution_types": inferences.get("contribution_types", []),
                             "confidence": inferences.get("confidence", "Low")
                         }
+                        # Update the main profile dict for the next pass
                         final_profiles[username].update(inferences)
         
-        # --- PASS 2: Team Structure (Python + 1 LLM Call) ---
+        # --- PASS 2: Team Structure (Python + 1 LLM Call) (UPDATED) ---
         print("\n" + "="*50)
         print("Performing second-level team structure analysis (Pass 2)...")
         print("="*50)
         
-        active_profiles_for_llm = {}
-        for username, profile in final_profiles.items():
-            if "technical_skills" in profile and profile["technical_skills"]:
-                active_profiles_for_llm[username] = {
-                    "inferred_role": profile["inferred_role"],
-                    "technical_skills": profile["technical_skills"],
-                    "contribution_types": profile["contribution_types"]
-                }
+        # --- HIERARCHY FIX ---
+        # We now pass the *entire* rich output from Pass 1 ('for_output_pass_1')
+        # to the Pass 2 LLM. This gives the model all the context (bios,
+        # activity counts, skills) it needs to infer a proper hierarchy.
         
-        llm_team_analysis = await asyncio.to_thread(
-            generate_team_structure_analysis, 
-            active_profiles_for_llm,
-            pass_2_prompt
-        )
+        print(f"Sending {len(for_output_pass_1)} active profiles to Pass 2...")
+
+        if not for_output_pass_1:
+            print("No active profiles with skills found after Pass 1. Skipping Pass 2.")
+            llm_team_analysis = {} # Default to empty analysis
+        else:
+            llm_team_analysis = await asyncio.to_thread(
+                generate_team_structure_analysis, 
+                for_output_pass_1,  # <-- This is the new, rich input
+                pass_2_prompt
+            )
+        # --- END HIERARCHY FIX ---
         
         final_team_structure = {
             "active_teams": llm_team_analysis.get("active_teams", {}),
@@ -922,4 +948,5 @@ async def main(repo_name, install_token, days_to_scan):
         print(f"\nAn unexpected error occurred in main: {e}")
         import traceback
         traceback.print_exc()
+        # Ensure we don't accidentally return a success to Lambda
         raise e

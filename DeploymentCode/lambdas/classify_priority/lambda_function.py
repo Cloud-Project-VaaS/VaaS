@@ -3,9 +3,9 @@ import os
 import time
 from typing import Dict, Any, List
 from datetime import datetime, timezone
+from decimal import Decimal # <-- FIX 2: Import Decimal
 
 # --- AWS SDK (Boto3) ---
-# This should be in your container's requirements.txt
 import boto3
 
 # --- Your Custom Model Logic (UNCHANGED) ---
@@ -84,47 +84,49 @@ def lambda_handler(event: Dict[str, Any], context: Any):
     
     table = dynamodb.Table(ISSUES_TABLE_NAME)
     
-    # Use DynamoDB Batch Writer for maximum efficiency
-    with table.batch_writer() as batch:
-        for issue in issues_list:
-            try:
-                # 2. Extract data for this issue
-                issue_id = issue['issue_id']
-                # Use the ENRICHED title/body
-                title = issue.get('enriched_title', issue.get('title', '')).strip()
-                body = issue.get('enriched_body', issue.get('body', '')).strip()
-                
-                text_content = f"{title}\n\n{body}".strip()
-                
-                # 3. Classify the priority using your model
-                if not text_content:
-                    prediction = {"priority": "low", "scores": {"high": 0.0, "medium": 0.0, "low": 1.0}}
-                else:
-                    prediction = get_priority_prediction(text_content)
-                
-                priority = prediction.get("priority", "low") # Get the top category
-                print(f"  - Result for {repo_name}#{issue_id}: {priority}")
+    # --- FIX 1: Removed the 'with table.batch_writer() as batch:' line ---
+    
+    for issue in issues_list:
+        try:
+            # 2. Extract data for this issue
+            issue_id = issue['issue_id']
+            # Use the ENRICHED title/body
+            title = issue.get('enriched_title', issue.get('title', '')).strip()
+            body = issue.get('enriched_body', issue.get('body', '')).strip()
+            
+            text_content = f"{title}\n\n{body}".strip()
+            
+            # 3. Classify the priority using your model
+            if not text_content:
+                prediction = {"priority": "low", "scores": {"high": 0.0, "medium": 0.0, "low": 1.0}}
+            else:
+                prediction = get_priority_prediction(text_content)
+            
+            priority = prediction.get("priority", "low") # Get the top category
+            print(f"  - Result for {repo_name}#{issue_id}: {priority}")
 
-                # 4. Update the item in DynamoDB
-                batch.update_item(
-                    Key={
-                        'repo_name': repo_name,
-                        'issue_id': issue_id
-                    },
-                    UpdateExpression="SET priority = :p, priority_scores = :ps, last_updated_pipeline = :lu",
-                    ExpressionAttributeValues={
-                        ':p': priority,
-                        ':ps': json.dumps(prediction.get("scores", {})), # Store all scores as a JSON string
-                        ':lu': datetime.now(timezone.utc).isoformat()
-                    }
-                )
-                
-                # Pass the classification to the next event
-                issue['priority'] = priority
+            # --- FIX 1: Changed 'batch.update_item' to 'table.update_item' ---
+            table.update_item(
+                Key={
+                    'repo_name': repo_name,
+                    'issue_id': issue_id
+                },
+                UpdateExpression="SET priority = :p, priority_scores = :ps, last_updated_pipeline = :lu",
+                ExpressionAttributeValues={
+                    ':p': priority,
+                    # --- FIX 2: Convert floats to Decimals for DynamoDB ---
+                    # Use json.loads with parse_float=Decimal to handle conversion
+                    ':ps': json.loads(json.dumps(prediction.get("scores", {})), parse_float=Decimal),
+                    ':lu': datetime.now(timezone.utc).isoformat()
+                }
+            )
+            
+            # Pass the classification to the next event
+            issue['priority'] = priority
 
-            except Exception as e:
-                print(f"ERROR: Failed to process issue {issue.get('issue_id')}: {e}")
-                continue # Skip this issue and continue with the next
+        except Exception as e:
+            print(f"ERROR: Failed to process issue {issue.get('issue_id')}: {e}")
+            continue # Skip this issue and continue with the next
     
     print(f"Successfully processed and updated {len(issues_list)} issues.")
     

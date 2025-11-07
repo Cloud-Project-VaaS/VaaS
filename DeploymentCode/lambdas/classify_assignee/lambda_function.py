@@ -6,8 +6,7 @@ import jwt  # PyJWT
 import time
 import httpx
 import re
-import yaml  # PyYAML
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from decimal import Decimal
 
@@ -15,277 +14,20 @@ from decimal import Decimal
 bedrock_client = boto3.client('bedrock-runtime')
 dynamodb = boto3.resource('dynamodb')
 secrets_client = boto3.client('secretsmanager')
-eventbridge_client = boto3.client('events') # We don't send an event *from* this, but good to have
+eventbridge_client = boto3.client('events')
 
 # --- Configuration (from Environment Variables) ---
 ISSUES_TABLE_NAME = os.environ.get("ISSUES_TABLE_NAME")
 EXPERTISE_TABLE_NAME = os.environ.get("EXPERTISE_TABLE_NAME")
 USER_AVAILABILITY_TABLE_NAME = os.environ.get("USER_AVAILABILITY_TABLE_NAME") 
 SECRET_ARN = os.environ.get('SECRET_ARN')
+INSTALLATIONS_TABLE_NAME = os.environ.get("INSTALLATIONS_TABLE_NAME", "github-installations")
 
-LLM_MODEL_ID = "deepseek.v3-v1:0"  # Sticking with DeepSeek
+LLM_MODEL_ID = "deepseek.v3-v1:0"
 LLM_MAX_RETRIES = 2
 LLM_RETRY_BACKOFF_FACTOR = 0.5
 
-# --- Config Files (Pasted from your .yaml files) ---
-# This makes the Lambda self-contained.
-TEAM_CONFIG_DATA = """
-version: 1
-teams:
-  - name: "backend"
-    timezone: "Asia/Kolkata"
-    working_hours_local: "10:00-18:00" # Team default
-    weekends: ["SAT", "SUN"]
-    holidays:
-      - "2025-01-26"
-      - "2025-08-15"
-      - "2025-10-02"
-    weekend_coverage:
-      enabled: true
-      working_hours_local: "10:00-16:00"
-    members:
-      - handle: "@anil"
-        role: "lead"
-        jira_account_id: "<anil_account_id>" # Placeholder
-        availability:
-          timezone: "Asia/Kolkata"
-          working_hours_local: "09:00-17:00"
-          pto: []
-      - handle: "@bhavna"
-        role: "reviewer"
-        jira_account_id: "<bhavna_account_id>" # Placeholder
-        availability:
-          timezone: "Asia/Kolkata"
-          working_hours_local: "10:30-18:30"
-          pto: ["2025-10-14..2025-10-20"]
-
-  - name: "frontend"
-    timezone: "America/Los_Angeles"
-    working_hours_local: "10:00-18:00"
-    weekends: ["SAT", "SUN"]
-    holidays:
-      - "2025-07-04"
-      - "2025-11-27"
-    weekend_coverage:
-      enabled: true
-      working_hours_local: "09:00-13:00"
-    members:
-      - handle: "@dave"
-        role: "lead"
-        jira_account_id: "<dave_account_id>" # Placeholder
-        availability:
-          timezone: "America/Los_Angeles"
-          working_hours_local: "08:00-16:00"
-          pto: []
-      - handle: "@erin"
-        role: "reviewer"
-        jira_account_id: "<erin_account_id>" # Placeholder
-        availability:
-          timezone: "America/Los_Angeles"
-          working_hours_local: "09:30-17:30"
-          pto: []
-
-  - name: "ml"
-    timezone: "Europe/Berlin"
-    working_hours_local: "09:00-17:00"
-    weekends: ["SAT", "SUN"]
-    holidays:
-      - "2025-10-03"
-      - "2025-12-25"
-    weekend_coverage:
-      enabled: false # This team does not work weekends
-    members:
-      - handle: "@felix"
-        role: "lead"
-        jira_account_id: "<felix_account_id>" # Placeholder
-        availability:
-          timezone: "Europe/Berlin"
-          working_hours_local: "08:00-16:00"
-          pto: []
-      - handle: "@giulia"
-        role: "reviewer"
-        jira_account_id: "<giulia_account_id>" # Placeholder
-        availability:
-          timezone: "Europe/Berlin"
-          working_hours_local: "09:30-17:30"
-          pto: []
-
-global_escalation_team:
-  name: "escalation-duty"
-  timezone: "UTC"
-  working_hours_local: "00:00-23:59" # 24/7
-  weekends: []
-  holidays: []
-  members:
-    - handle: "@zoe"
-      role: "lead"
-      jira_account_id: "<zoe_account_id>" # Placeholder
-      availability:
-        timezone: "UTC"
-        working_hours_local: "00:00-23:59"
-        pto: []
-    - handle: "@yuki"
-      role: "reviewer" 
-      jira_account_id: "<yuki_account_id>" # Placeholder
-      availability:
-        timezone: "UTC"
-        working_hours_local: "00:00-23:59"
-        pto: []
-"""
-
-SLA_CONFIG_DATA = """
-version: 1
-
-policies:
-  business_time:
-    mode: "team"
-    weekends: [] 
-    holidays_global: []
-  pause_labels: ["on-hold", "waiting-for-customer", "blocked"]
-  max_reassignments_per_item: 3
-  enforce_mode: "on" 
-  comment_on_actions: true
-
-# ===== ISSUE SLAs =====
-issues:
-  - id: "issue-bug-high"
-    name: "Bug — High"
-    match: 
-      all: ["type:bug", "priority:high"]
-    targets:
-      time_to_first_response: "8 business_hours"
-    escalation:
-      steps:
-        - at_percent: 70
-          action: "notify"
-          reason: "High priority bug SLA at 70%. Breach imminent."
-
-  - id: "issue-bug-medium"
-    name: "Bug — Medium"
-    match:
-      all: ["type:bug", "priority:medium"]
-    targets:
-      time_to_first_response: "1 business_day"
-    escalation:
-      steps:
-        - at_percent: 100
-          action: "reassign"
-          target: "role:lead" 
-          reason: "Medium bug breached. Escalating to team lead."
-
-  - id: "issue-bug-low"
-    name: "Bug — Low"
-    match:
-      all: ["type:bug", "priority:low"]
-    targets:
-      time_to_first_response: "3 business_days"
-    escalation:
-      steps:
-        - at_percent: 100
-          action: "notify"
-          reason: "Low bug breached. Sending reminder to reviewer."
-
-  - id: "issue-enhancement-high"
-    name: "Enhancement — High"
-    match:
-      all: ["type:enhancement", "priority:high"]
-    targets:
-      time_to_first_response: "1 business_day"
-    escalation:
-      steps:
-        - at_percent: 100
-          action: "reassign"
-          reason: "High priority enhancement breached. Escalating to team lead."
-          
-  - id: "issue-enhancement-medium"
-    name: "Enhancement — Medium"
-    match:
-      all: ["type:enhancement", "priority:medium"]
-    targets:
-      time_to_first_response: "3 business_days"
-    escalation:
-      steps:
-        - at_percent: 100
-          action: "reassign"
-          reason: "Medium enhancement breached. Assigning to team lead."
-
-  - id: "issue-enhancement-low"
-    name: "Enhancement — Low"
-    match:
-      all: ["type:enhancement", "priority:low"]
-    targets:
-      time_to_first_response: "5 business_days"
-    escalation:
-      steps:
-        - at_percent: 100
-          action: "notify"
-          reason: "Low enhancement breached. Sending reminder to reviewer."
-
-  - id: "issue-question-high"
-    name: "Question — High"
-    match:
-      all: ["type:question", "priority:high"]
-    targets:
-      time_to_first_response: "1 business_day"
-    escalation:
-      steps:
-        - at_percent: 100
-          action: "reassign"
-          reason: "High priority question breached. Escalating to team lead."
-
-  - id: "issue-question-medium"
-    name: "Question — Medium"
-    match:
-      all: ["type:question", "priority:medium"]
-    targets:
-      time_to_first_response: "3 business_days"
-    escalation:
-      steps:
-        - at_percent: 100
-          action: "reassign"
-          reason: "Medium question breached. Assigning to team lead."
-
-  - id: "issue-question-low"
-    name: "Question — Low"
-    match:
-      all: ["type:question", "priority:low"]
-    targets:
-      time_to_first_response: "7 business_days"
-    escalation:
-      steps:
-        - at_percent: 100
-          action: "notify"
-          reason: "Low question breached. Sending reminder to reviewer."
-"""
-# --- End Config Files ---
-
-
 # --- Global Variables (Loaded once at cold start) ---
-try:
-    # We load the config from the strings above
-    TEAM_CONFIG = yaml.safe_load(TEAM_CONFIG_DATA)
-    SLA_CONFIG = yaml.safe_load(SLA_CONFIG_DATA)
-    
-    # Build a fast-lookup map for teams
-    # handle (no @) -> {team_name, role, timezone, working_hours_local}
-    TEAM_LOOKUP_MAP: Dict[str, Dict] = {}
-    for team in TEAM_CONFIG.get('teams', []):
-        for member in team.get('members', []):
-            handle = member['handle'].lstrip('@') # Clean handle
-            TEAM_LOOKUP_MAP[handle] = {
-                "team_name": team['name'],
-                "role": member['role'],
-                "timezone": member.get('availability', {}).get('timezone', 'UTC'),
-                "working_hours_local": member.get('availability', {}).get('working_hours_local', '09:00-17:00')
-            }
-    
-except yaml.YAMLError as e:
-    print(f"FATAL: Failed to parse YAML config strings: {e}")
-    TEAM_CONFIG = {}
-    SLA_CONFIG = {}
-    TEAM_LOOKUP_MAP = {}
-
-# Global cache for secrets
 APP_ID = None
 PRIVATE_KEY = None
 
@@ -338,7 +80,6 @@ def get_installation_access_token(installation_id: int) -> str:
         }
         url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
         
-        # Use httpx for consistency
         with httpx.Client() as client:
             response = client.post(url, headers=headers)
             response.raise_for_status()
@@ -358,103 +99,101 @@ def get_installation_access_token(installation_id: int) -> str:
 
 # --- Core Logic: Data Fetching ---
 
-def get_team_and_availability_context() -> str:
+def get_availability_context(candidate_handles: List[str]) -> str:
     """
-    Parses team config and merges with INFERRED availability from UserAvailability table.
+    Parses INFERRED availability from UserAvailability table for a specific list of candidates.
     """
-    context = "Available Teams and Members (with Inferred UTC Availability):\n"
+    context = "Available Team Members (with Inferred UTC Availability):\n"
     
     if not USER_AVAILABILITY_TABLE_NAME:
-        print("Warning: USER_AVAILABILITY_TABLE_NAME not set. Using default config hours.")
-        # Fallback to just the config file if the table isn't set
-        for handle, member in TEAM_LOOKUP_MAP.items():
-            context += (
-                f"  - Member: @{handle} "
-                f"(Team: {member['team_name']}, "
-                f"Role: {member['role']}, "
-                f"Availability: {member['working_hours_local']} {member['timezone']}) (DEFAULT)\n"
-            )
-        return context
+        print("Warning: USER_AVAILABILITY_TABLE_NAME not set. Cannot fetch availability.")
+        return "Availability data is not available.\n"
+    
+    if not candidate_handles:
+        return "No candidates found to check availability.\n"
 
     try:
         table = dynamodb.Table(USER_AVAILABILITY_TABLE_NAME)
-        # Use batch_get_item for efficiency
-        keys_to_get = [{'user_handle': handle} for handle in TEAM_LOOKUP_MAP.keys()]
+        handles_no_at = [h.lstrip('@') for h in candidate_handles]
+        keys_to_get = [{'user_handle': handle} for handle in handles_no_at]
         
-        if not keys_to_get:
-            return "No team members configured.\n"
-            
         response = dynamodb.batch_get_item(RequestItems={USER_AVAILABILITY_TABLE_NAME: {'Keys': keys_to_get}})
         availability_data = {item['user_handle']: item for item in response.get('Responses', {}).get(USER_AVAILABILITY_TABLE_NAME, [])}
-        
-        # Merge config data with inferred availability
-        for handle, member_config in TEAM_LOOKUP_MAP.items():
+
+        for handle in handles_no_at:
             avail = availability_data.get(handle)
             if avail and 'inferred_start_time_utc' in avail:
-                # Use inferred data
                 start = avail.get('inferred_start_time_utc', 'N/A')
                 end = avail.get('inferred_end_time_utc', 'N/A')
                 avail_str = f"{start}-{end} UTC (Inferred)"
             else:
-                # Use default config data
-                avail_str = f"{member_config['working_hours_local']} {member_config['timezone']} (Default)"
+                avail_str = f"09:00-17:00 UTC (Default)"
 
             context += (
                 f"  - Member: @{handle} "
-                f"(Team: {member_config['team_name']}, "
-                f"Role: {member_config['role']}, "
-                f"Availability: {avail_str})\n"
+                f"(Availability: {avail_str})\n"
             )
         return context
         
     except Exception as e:
         print(f"Error fetching from UserAvailability table: {e}. Returning default hours.")
-        # Fallback to default if DDB call fails
-        default_context = "Available Teams and Members (using DEFAULT hours due to error):\n"
-        for handle, member in TEAM_LOOKUP_MAP.items():
+        default_context = "Available Team Members (using DEFAULT hours due to error):\n"
+        for handle in candidate_handles:
             default_context += (
-                f"  - Member: @{handle} "
-                f"(Team: {member['team_name']}, "
-                f"Role: {member['role']}, "
-                f"Availability: {member['working_hours_local']} {member['timezone']}) (DEFAULT)\n"
+                f"  - Member: {handle} "
+                f"(Availability: 09:00-17:00 UTC) (DEFAULT)\n"
             )
         return default_context
 
 
-def get_expertise_context(repo_name: str) -> str:
+def get_expertise_context(repo_name: str) -> Tuple[str, List[str]]:
     """
     Fetches the expert profiles from the RepoExpertise DynamoDB table.
+    Returns: (Context String for LLM, List of candidate handles with '@')
     """
     if not EXPERTISE_TABLE_NAME:
         print("Warning: EXPERTISE_TABLE_NAME not set. Cannot fetch expertise.")
-        return "Expertise data is not available.\n"
+        return "Expertise data is not available.\n", []
 
+    candidate_handles: List[str] = []
     try:
         table = dynamodb.Table(EXPERTISE_TABLE_NAME)
         response = table.get_item(Key={'repo_name': repo_name})
         
         if 'Item' not in response:
             print(f"No expertise data found for repo: {repo_name}")
-            return "Expertise data is not available for this repo.\n"
+            return "Expertise data is not available for this repo.\n", []
             
         item = response['Item']
-        profiles = item.get('expertise_profiles', [])
+        # --- FIX 2: 'expertise_profiles' is a Map (dict), not a list. ---
+        profiles = item.get('expertise_profiles', {})
         
         if not profiles:
-            return "No expertise profiles found for this repo.\n"
+            return "No expertise profiles found for this repo.\n", []
 
         # Format for LLM prompt
         context = "Ranked Expertise Profiles (from repo analysis):\n"
-        for profile in profiles:
-            login = profile.get('login', 'unknown')
-            summary = profile.get('summary', 'no summary')
-            context += f"- {login}: {summary}\n"
+        
+        # --- FIX 2: Iterate over .items() of the dictionary ---
+        for login, profile in profiles.items():
+            # 'profile' is now the map containing username, summary, etc.
+            handle_at = f"@{login}"
             
-        return context
+            # Create a summary of skills and contribution types for the context
+            skills = ", ".join(profile.get('technical_skills', ['N/A']))
+            contribs = ", ".join(profile.get('contribution_types', ['N/A']))
+            summary = f"Role: {profile.get('inferred_role', 'N/A')}. Skills: {skills}. Focus: {contribs}."
+            
+            context += f"- {handle_at}: {summary}\n"
+            candidate_handles.append(handle_at)
+            
+        return context, candidate_handles
 
     except Exception as e:
         print(f"Error fetching from RepoExpertise table: {e}")
-        return f"Error fetching expertise data: {e}\n"
+        import traceback
+        traceback.print_exc() # Print full error
+        return f"Error fetching expertise data: {e}\n", []
 
 def get_workload_context(candidate_handles: List[str]) -> str:
     """
@@ -464,15 +203,15 @@ def get_workload_context(candidate_handles: List[str]) -> str:
     if not ISSUES_TABLE_NAME:
         print("Warning: ISSUES_TABLE_NAME not set. Cannot fetch workload.")
         return "Workload data is not available.\n"
+        
+    if not candidate_handles:
+        return "No candidates found to check workload.\n"
 
     try:
         table = dynamodb.Table(ISSUES_TABLE_NAME)
         context = "Current Candidate Workload (open issues assigned):\n"
         
         for handle_at in candidate_handles:
-            # handle_at is like "@anil"
-            
-            # This is a GSI query.
             response = table.query(
                 IndexName='by_assignee_and_status',
                 KeyConditionExpression="current_assignee = :h AND #s = :s",
@@ -488,47 +227,18 @@ def get_workload_context(candidate_handles: List[str]) -> str:
         print(f"CRITICAL ERROR fetching workload from IssuesTrackingTable (Is GSI 'by_assignee_and_status' created?): {e}")
         return f"Error fetching workload data. GSI may be missing or building.\n"
 
-def get_sla_due_date(issue_type: str, priority: str) -> Tuple[str, str]:
-    """
-    Finds the matching SLA policy and returns the target time and escalation action.
-    """
-    try:
-        policies = SLA_CONFIG.get('issues', [])
-        for policy in policies:
-            match = policy.get('match', {})
-            all_match = match.get('all', [])
-            
-            # Normalize inputs
-            type_match = f"type:{issue_type.lower()}" in all_match
-            priority_match = f"priority:{priority.lower()}" in all_match
-            
-            if type_match and priority_match:
-                target_time = policy.get('targets', {}).get('time_to_first_response', '5 business_days')
-                escalation_action = "notify" # Default
-                
-                for step in policy.get('escalation', {}).get('steps', []):
-                    if step.get('action') == 'reassign':
-                        escalation_action = f"reassign to {step.get('target', 'lead')}"
-                        break
-                
-                return target_time, escalation_action
-
-    except Exception as e:
-        print(f"Error parsing SLA config: {e}")
-        
-    return "5 business_days", "notify" # Default fallback
-
-
-def run_assignment_llm(issue: Dict, context: str) -> Optional[Dict]:
+def run_assignment_llm(issue: Dict, context: str, candidate_handles: List[str]) -> Optional[Dict]:
     """
     Calls the Bedrock LLM to get the final assignment decision.
     """
     print(f"Running assignment LLM for issue {issue['issue_id']}...")
     
-    system_prompt = """You are a senior engineering manager. Your job is to assign a new GitHub issue to the best possible person.
-You will be given context about the issue, the team, member expertise, and current workload.
+    candidate_list_str = ", ".join([f"'{h}'" for h in candidate_handles])
+    
+    system_prompt = f"""You are a senior engineering manager. Your job is to assign a new GitHub issue to the best possible person from a specific list of candidates.
+You will be given context about the issue, the candidates' expertise, their availability, and current workload.
 You must return ONLY a single, valid JSON object with the following keys:
-- "assignee_handle": The GitHub handle of the best person (e.g., "@anil"). MUST be one of the handles from the 'Available Teams' list.
+- "assignee_handle": The GitHub handle of the best person (e.g., "@anil"). MUST be one of the handles from this *exact* list of candidates: [{candidate_list_str}]
 - "labels_to_add": A list of strings for GitHub labels (e.g., ["Bug", "P1"]).
 - "reasoning": A brief, professional justification for your choice.
 - "confidence": A float from 0.0 to 1.0.
@@ -536,12 +246,11 @@ You must return ONLY a single, valid JSON object with the following keys:
 Use this reasoning process:
 1.  **Expertise:** Use the 'Ranked Expertise Profiles' to find the person with the most relevant skills. This is the most important factor.
 2.  **Workload:** Use the 'Current Candidate Workload'. If the best expert is overloaded (e.g., > 5 open issues), strongly consider the #2 expert.
-3.  **Availability/Role:** Use the 'Available Teams' info. Favor 'reviewers' for most tasks and 'leads' for high-priority or complex tasks.
+3.  **Availability:** Use the 'Available Team Members' info to see who is online. Prefer users who are within their inferred UTC window.
 4.  **Labels:** The labels to add are *always* the issue `type` and `priority` (e.g., "Bug", "High").
-5.  **Fallback:** If no expert is a good fit or all are overloaded, assign to the 'lead' of the most relevant team.
+5.  **Fallback:** If no expert is a good fit or all are overloaded, you MUST still pick the *best available* person from the candidate list. Do not make up a user.
 """
     
-    # Use the enriched title/body if they exist, otherwise fall back to original
     title = issue.get('enriched_title', issue.get('title', 'No Title'))
     body = issue.get('enriched_body', issue.get('body', 'No Body'))
     
@@ -555,6 +264,9 @@ Title: {title}
 Body: {body[:2000]}
 Type: {issue.get('issue_type', 'unknown')}
 Priority: {issue.get('priority', 'unknown')}
+
+--- CANDIDATE LIST ---
+You MUST assign this issue to one of: [{candidate_list_str}]
 
 --- YOUR DECISION ---
 Return ONLY the JSON object.
@@ -581,17 +293,15 @@ Return ONLY the JSON object.
             response_body = json.loads(response.get('body').read())
             result_text = response_body.get('choices', [{}])[0].get('message', {}).get('content', '').strip()
             
-            # Find and parse the JSON block
             match = re.search(r'\{.*\}', result_text, re.DOTALL)
             if match:
                 decision = json.loads(match.group(0))
-                # Validate key fields
-                handle = decision.get('assignee_handle', '').lstrip('@')
-                if handle and handle in TEAM_LOOKUP_MAP and 'labels_to_add' in decision:
-                    decision['assignee_handle'] = f"@{handle}" # Standardize with @
+                handle_at = decision.get('assignee_handle')
+                if handle_at and handle_at in candidate_handles and 'labels_to_add' in decision:
+                    decision['assignee_handle'] = handle_at
                     return decision
                 else:
-                    print(f"Warning: LLM returned invalid handle '@{handle}' (not in TEAM_LOOKUP_MAP) or missing keys. Retrying.")
+                    print(f"Warning: LLM returned invalid handle '{handle_at}' (not in candidate list) or missing keys. Retrying.")
             else:
                 print(f"Warning: LLM returned invalid JSON: {result_text}. Retrying.")
             
@@ -614,8 +324,8 @@ def update_github_and_dynamodb(
     """
     repo_name = issue['repo_name']
     issue_id = issue['issue_id']
-    assignee_handle_at = decision['assignee_handle'] # e.g., "@anil"
-    assignee_handle_clean = assignee_handle_at.lstrip('@') # e.g., "anil"
+    assignee_handle_at = decision['assignee_handle']
+    assignee_handle_clean = assignee_handle_at.lstrip('@')
     labels_to_add = decision.get('labels_to_add', [])
     
     print(f"Attempting to update GitHub for {repo_name}#{issue_id}...")
@@ -633,7 +343,6 @@ def update_github_and_dynamodb(
             "labels": labels_to_add
         }
         
-        # Use httpx for this call
         with httpx.Client() as client:
             response = client.patch(api_url, headers=headers, json=payload)
             response.raise_for_status()
@@ -642,17 +351,10 @@ def update_github_and_dynamodb(
 
     except Exception as e:
         print(f"WARNING: Failed to update GitHub issue {repo_name}#{issue_id}: {e}. Check app permissions.")
-        # We still continue, to at least save our decision in DynamoDB
 
     # 2. Update DynamoDB
     print(f"Updating DynamoDB for {repo_name}#{issue_id}...")
     try:
-        # Get SLA info
-        sla_target, sla_escalation = get_sla_due_date(
-            issue.get('issue_type', 'unknown'),
-            issue.get('priority', 'unknown')
-        )
-        
         table.update_item(
             Key={
                 'repo_name': repo_name,
@@ -661,20 +363,17 @@ def update_github_and_dynamodb(
             UpdateExpression=(
                 "SET current_assignee = :a, assignment_reason = :r, "
                 "assignment_confidence = :c, assignment_time = :at, "
-                "github_labels = :l, sla_target = :st, "
-                "sla_escalation_policy = :se, #s = :s, "
+                "github_labels = :l, #s = :s, "
                 "last_updated_pipeline = :lu"
             ),
-            ExpressionAttributeNames={"#s": "status"}, # 'status' is a reserved word
+            ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
-                ':a': assignee_handle_at, # Store with '@'
+                ':a': assignee_handle_at,
                 ':r': decision.get('reasoning', 'N/A'),
-                ':c': Decimal(str(decision.get('confidence', 0.0))), # Use Decimal
+                ':c': Decimal(str(decision.get('confidence', 0.0))),
                 ':at': datetime.now(timezone.utc).isoformat(),
                 ':l': labels_to_add,
-                ':st': sla_target,
-                ':se': sla_escalation,
-                ':s': 'open', # Explicitly set status to open
+                ':s': 'open',
                 ':lu': datetime.now(timezone.utc).isoformat()
             }
         )
@@ -682,20 +381,22 @@ def update_github_and_dynamodb(
         
     except Exception as e:
         print(f"ERROR: Failed to update DynamoDB for {repo_name}#{issue_id}: {e}")
-        # Log the error but don't fail the whole batch
 
 # --- Main Handler ---
-
 def lambda_handler(event, context):
     """
     Main Lambda handler. Triggered by EventBridge with a BATCH of *prioritized* issues.
     """
     print("Classify Assignee event received:")
     print(json.dumps(event))
-    
-    # --- 1. Validate Environment ---
-    if not all([ISSUES_TABLE_NAME, EXPERTISE_TABLE_NAME, USER_AVAILABILITY_TABLE_NAME, SECRET_ARN, TEAM_CONFIG, SLA_CONFIG]):
-        print("FATAL: Missing one or more environment variables or failed to parse YAML config.")
+
+    # --- 1. Load Configs and Validate Environment ---
+    try:
+        if not all([ISSUES_TABLE_NAME, EXPERTISE_TABLE_NAME, USER_AVAILABILITY_TABLE_NAME, SECRET_ARN, INSTALLATIONS_TABLE_NAME]):
+            raise EnvironmentError("Missing one or more required environment variables.")
+
+    except Exception as e:
+        print(f"FATAL: {e}")
         return {'statusCode': 500, 'body': 'Internal configuration error'}
         
     # --- 2. Parse Event ---
@@ -721,44 +422,41 @@ def lambda_handler(event, context):
     try:
         print(f"Fetching context for repo: {repo_name}...")
         
-        # We need an installation_id to authenticate. We fixed this in fetch_and_classify_issues.
-        # All issues in this batch *must* have the same installation_id.
         first_issue = issues_list[0]
         installation_id = first_issue.get('installation_id')
+        
         if not installation_id:
-            # We must get the installation_id from the repo name, as it was lost.
             print(f"Installation_id missing from payload. Fetching from 'github-installations' table...")
-            install_table = dynamodb.Table(os.environ.get("INSTALLATIONS_TABLE_NAME", "github-installations"))
-            # This is an inefficient query, but it's a critical fallback.
-            # A better way is to ensure fetch_and_classify_issues adds it.
-            response = install_table.query(
-                IndexName='repo_name-index', # Assumes a GSI. If not, this fails.
-                KeyConditionExpression="repo_name = :r",
-                ExpressionAttributeValues={":r": repo_name}
-            )
-            if not response.get('Items'):
-                 print(f"FATAL: Could not find installation_id for repo {repo_name}.")
-                 return
-            installation_id = int(response['Items'][0]['installation_id'])
-            print(f"Found installation_id: {installation_id}")
-
+            install_table = dynamodb.Table(INSTALLATIONS_TABLE_NAME)
             
-        # 1. Get GitHub Auth Token (one token for the whole batch)
+            try:
+                response = install_table.query(
+                    IndexName='repo_name-index', 
+                    KeyConditionExpression="repo_name = :r",
+                    ExpressionAttributeValues={":r": repo_name}
+                )
+                if not response.get('Items'):
+                     print(f"FATAL: Could not find installation_id for repo {repo_name}.")
+                     return
+                installation_id = int(response['Items'][0]['installation_id'])
+                print(f"Found installation_id: {installation_id}")
+            except Exception as e:
+                print(f"CRITICAL ERROR: Could not query 'github-installations' by repo_name. Did you create the GSI 'repo_name-index'?")
+                print(f"Error: {e}")
+                raise
+
         install_token = get_installation_access_token(installation_id)
+        expertise_context, candidate_handles = get_expertise_context(repo_name)
         
-        # 2. Get Team/Availability Context
-        team_context = get_team_and_availability_context()
+        if not candidate_handles:
+            print(f"No candidates found in RepoExpertise for {repo_name}. Skipping assignment.")
+            return
+            
+        availability_context = get_availability_context(candidate_handles)
+        workload_context = get_workload_context(candidate_handles)
         
-        # 3. Get Expertise Context
-        expertise_context = get_expertise_context(repo_name)
-        
-        # 4. Get Workload Context (for all *potential* assignees)
-        all_handles = [f"@{h}" for h in TEAM_LOOKUP_MAP.keys()]
-        workload_context = get_workload_context(all_handles)
-        
-        # 5. Combine all context for the LLM
-        final_context = f"{team_context}\n{expertise_context}\n{workload_context}"
-        print("Successfully generated all context.")
+        final_context = f"{availability_context}\n{expertise_context}\n{workload_context}"
+        print(f"Successfully generated all context for {len(candidate_handles)} candidates.")
         
     except Exception as e:
         print(f"FATAL: Failed to prepare context for {repo_name}. Stopping. Error: {e}")
@@ -771,11 +469,13 @@ def lambda_handler(event, context):
     
     for issue in issues_list:
         try:
+            # --- FIX 3: Add 'repo_name' to the issue dict before passing it ---
+            issue['repo_name'] = repo_name
+            
             # 1. Get LLM Assignment
-            decision = run_assignment_llm(issue, final_context)
+            decision = run_assignment_llm(issue, final_context, candidate_handles)
             
             if not decision:
-                # TODO: Implement a fallback (e.g., assign to team lead)
                 print(f"Warning: LLM failed to provide assignment for {issue['issue_id']}. Skipping.")
                 continue
 
@@ -784,7 +484,9 @@ def lambda_handler(event, context):
 
         except Exception as e:
             print(f"ERROR: Failed to process issue {issue.get('issue_id')}: {e}")
-            continue # Skip this issue and continue
+            import traceback
+            traceback.print_exc() # Print full error for debugging
+            continue
             
     print(f"Successfully processed batch for {repo_name}.")
     return {'statusCode': 200, 'body': 'Batch assignment complete.'}

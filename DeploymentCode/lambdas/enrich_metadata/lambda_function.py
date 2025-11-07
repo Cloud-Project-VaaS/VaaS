@@ -108,46 +108,46 @@ def lambda_handler(event, context):
     
     table = dynamodb.Table(ISSUES_TABLE_NAME)
     
-    # Use DynamoDB Batch Writer for maximum efficiency
-    with table.batch_writer() as batch:
-        for issue in issues_list:
-            try:
-                # 2. Extract data for this issue
-                issue_id = issue['issue_id']
-                original_title = issue.get('title', '')
-                original_body = issue.get('body', '')
-                
-                # 3. Enrich the text
-                print(f"  - Enriching {repo_name}#{issue_id}...")
-                enriched_title = enrich_text_with_bedrock(original_title, "title")
-                # Simple rate limit to not overwhelm Bedrock
-                time.sleep(1) 
-                
-                enriched_body = enrich_text_with_bedrock(original_body, "body")
-                # Simple rate limit to not overwhelm Bedrock
-                time.sleep(1) 
+    # --- FIX: Removed the 'with table.batch_writer() as batch:' line ---
+    
+    for issue in issues_list:
+        try:
+            # 2. Extract data for this issue
+            issue_id = issue['issue_id']
+            original_title = issue.get('title', '')
+            original_body = issue.get('body', '')
+            
+            # 3. Enrich the text
+            print(f"  - Enriching {repo_name}#{issue_id}...")
+            enriched_title = enrich_text_with_bedrock(original_title, "title")
+            # Simple rate limit to not overwhelm Bedrock
+            time.sleep(1) 
+            
+            enriched_body = enrich_text_with_bedrock(original_body, "body")
+            # Simple rate limit to not overwhelm Bedrock
+            time.sleep(1) 
 
-                # 4. Update the item in DynamoDB
-                batch.update_item(
-                    Key={
-                        'repo_name': repo_name,
-                        'issue_id': issue_id
-                    },
-                    UpdateExpression="SET enriched_title = :et, enriched_body = :eb, last_updated_pipeline = :lu",
-                    ExpressionAttributeValues={
-                        ':et': enriched_title,
-                        ':eb': enriched_body,
-                        ':lu': datetime.now(timezone.utc).isoformat()
-                    }
-                )
-                
-                # We'll pass the enriched data to the next event
-                issue['title'] = enriched_title
-                issue['body'] = enriched_body
+            # --- FIX: Changed 'batch.update_item' to 'table.update_item' ---
+            table.update_item(
+                Key={
+                    'repo_name': repo_name,
+                    'issue_id': issue_id
+                },
+                UpdateExpression="SET enriched_title = :et, enriched_body = :eb, last_updated_pipeline = :lu",
+                ExpressionAttributeValues={
+                    ':et': enriched_title,
+                    ':eb': enriched_body,
+                    ':lu': datetime.now(timezone.utc).isoformat()
+                }
+            )
+            
+            # We'll pass the enriched data to the next event
+            issue['title'] = enriched_title
+            issue['body'] = enriched_body
 
-            except Exception as e:
-                print(f"ERROR: Failed to process issue {issue.get('issue_id')}: {e}")
-                continue # Skip this issue and continue with the next
+        except Exception as e:
+            print(f"ERROR: Failed to process issue {issue.get('issue_id')}: {e}")
+            continue # Skip this issue and continue with the next
     
     print(f"Successfully processed and updated {len(issues_list)} issues.")
     
