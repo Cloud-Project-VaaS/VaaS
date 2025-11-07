@@ -1,0 +1,144 @@
+version: 1
+
+policies:
+  business_time:
+    mode: "team"
+    weekends: [] 
+    holidays_global: []
+  pause_labels: ["on-hold", "waiting-for-customer", "blocked"]
+  max_reassignments_per_item: 3
+  enforce_mode: "on" 
+  comment_on_actions: true
+
+# ===== PULL REQUEST SLAs =====
+pull_requests:
+  - id: "pr-default-high"
+    name: "Default PR Review"
+    match:
+      all: ["type:pull_request"]
+    targets:
+      time_to_first_response: "8 business_hours"
+    escalation:
+      steps:
+        # 70% step to inform the team lead
+        - at_percent: 70
+          action: "notify"
+          reason: "PR review SLA at 70%. Breach imminent."
+
+# ===== ISSUE SLAs =====
+issues:
+  # ---- BUGS ----
+  - id: "issue-bug-high"
+    name: "Bug — High"
+    match: 
+      all: ["type:bug", "priority:high"]
+    targets:
+      time_to_first_response: "8 business_hours"
+    escalation:
+      steps:
+        # 70% step to inform the team lead
+        - at_percent: 70
+          action: "notify"
+          reason: "High priority bug SLA at 70%. Breach imminent."
+
+  - id: "issue-bug-medium"
+    name: "Bug — Medium"
+    match:
+      all: ["type:bug", "priority:medium"]
+    targets:
+      time_to_first_response: "1 business_day"
+    escalation:
+      steps:
+        - at_percent: 100
+          action: "reassign"
+          target: "role:lead" 
+          reason: "Medium bug breached. Escalating to team lead."
+
+  - id: "issue-bug-low"
+    name: "Bug — Low"
+    match:
+      all: ["type:bug", "priority:low"]
+    targets:
+      time_to_first_response: "3 business_days"
+    escalation:
+      steps:
+        # Send a notification to the reviewer role
+        - at_percent: 100
+          action: "notify"
+          reason: "Low bug breached. Sending reminder to reviewer."
+
+  # ---- ENHANCEMENTS ----
+  - id: "issue-enhancement-high"
+    name: "Enhancement — High"
+    match:
+      all: ["type:enhancement", "priority:high"]
+    targets:
+      time_to_first_response: "1 business_day"
+    escalation:
+      steps:
+        - at_percent: 100
+          action: "reassign"
+          reason: "High priority enhancement breached. Escalating to team lead."
+
+  - id: "issue-enhancement-medium"
+    name: "Enhancement — Medium"
+    match:
+      all: ["type:enhancement", "priority:medium"]
+    targets:
+      time_to_first_response: "3 business_days"
+    escalation:
+      steps:
+        - at_percent: 100
+          action: "reassign"
+          reason: "Medium enhancement breached. Assigning to team lead."
+
+  - id: "issue-enhancement-low"
+    name: "Enhancement — Low"
+    match:
+      all: ["type:enhancement", "priority:low"]
+    targets:
+      time_to_first_response: "5 business_days"
+    escalation:
+      steps:
+        # Send a notification to the reviewer role
+        - at_percent: 100
+          action: "notify"
+          reason: "Low enhancement breached. Sending reminder to reviewer."
+
+  # ---- QUESTIONS ----
+  - id: "issue-question-high"
+    name: "Question — High"
+    match:
+      all: ["type:question", "priority:high"]
+    targets:
+      time_to_first_response: "1 business_day"
+    escalation:
+      steps:
+        - at_percent: 100
+          action: "reassign"
+          reason: "High priority question breached. Escalating to team lead."
+
+  - id: "issue-question-medium"
+    name: "Question — Medium"
+    match:
+      all: ["type:question", "priority:medium"]
+    targets:
+      time_to_first_response: "3 business_days"
+    escalation:
+      steps:
+        - at_percent: 100
+          action: "reassign"
+          reason: "Medium question breached. Assigning to team lead."
+
+  - id: "issue-question-low"
+    name: "Question — Low"
+    match:
+      all: ["type:question", "priority:low"]
+    targets:
+      time_to_first_response: "7 business_days"
+    escalation:
+      steps:
+        # Send a notification to the reviewer role
+        - at_percent: 100
+          action: "notify"
+          reason: "Low question breached. Sending reminder to reviewer."

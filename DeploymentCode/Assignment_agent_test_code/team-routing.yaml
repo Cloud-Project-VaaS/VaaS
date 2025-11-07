@@ -1,0 +1,101 @@
+version: 1
+teams:
+  - name: "backend"
+    timezone: "Asia/Kolkata"
+    working_hours_local: "10:00-18:00" # Team default
+    weekends: ["SAT", "SUN"]
+    holidays:
+      - "2025-01-26"
+      - "2025-08-15"
+      - "2025-10-02"
+    weekend_coverage:
+      enabled: true
+      working_hours_local: "10:00-16:00"
+    members:
+      - handle: "@anil"
+        role: "lead"
+        jira_account_id: "<anil_account_id>" # Placeholder
+        availability:
+          timezone: "Asia/Kolkata"
+          working_hours_local: "09:00-17:00"
+          pto: []
+      - handle: "@bhavna"
+        role: "reviewer"
+        jira_account_id: "<bhavna_account_id>" # Placeholder
+        availability:
+          timezone: "Asia/Kolkata"
+          working_hours_local: "10:30-18:30"
+          pto: ["2025-10-14..2025-10-20"]
+
+  - name: "frontend"
+    timezone: "America/Los_Angeles"
+    working_hours_local: "10:00-18:00"
+    weekends: ["SAT", "SUN"]
+    holidays:
+      - "2025-07-04"
+      - "2025-11-27"
+    weekend_coverage:
+      enabled: true
+      working_hours_local: "09:00-13:00"
+    members:
+      - handle: "@dave"
+        role: "lead"
+        jira_account_id: "<dave_account_id>" # Placeholder
+        availability:
+          timezone: "America/Los_Angeles"
+          working_hours_local: "08:00-16:00"
+          pto: []
+      - handle: "@erin"
+        role: "reviewer"
+        jira_account_id: "<erin_account_id>" # Placeholder
+        availability:
+          timezone: "America/Los_Angeles"
+          working_hours_local: "09:30-17:30"
+          pto: []
+
+  - name: "ml"
+    timezone: "Europe/Berlin"
+    working_hours_local: "09:00-17:00"
+    weekends: ["SAT", "SUN"]
+    holidays:
+      - "2025-10-03"
+      - "2025-12-25"
+    weekend_coverage:
+      enabled: false # This team does not work weekends
+    members:
+      - handle: "@felix"
+        role: "lead"
+        jira_account_id: "<felix_account_id>" # Placeholder
+        availability:
+          timezone: "Europe/Berlin"
+          working_hours_local: "08:00-16:00"
+          pto: []
+      - handle: "@giulia"
+        role: "reviewer"
+        jira_account_id: "<giulia_account_id>" # Placeholder
+        availability:
+          timezone: "Europe/Berlin"
+          working_hours_local: "09:30-17:30"
+          pto: []
+
+global_escalation_team:
+  name: "escalation-duty"
+  timezone: "UTC"
+  working_hours_local: "00:00-23:59" # 24/7
+  weekends: []
+  holidays: []
+  members:
+    - handle: "@zoe"
+      role: "lead"
+      jira_account_id: "<zoe_account_id>" # Placeholder
+      availability:
+        timezone: "UTC"
+        working_hours_local: "00:00-23:59"
+        pto: []
+    - handle: "@yuki"
+      role: "reviewer" 
+      jira_account_id: "<yuki_account_id>" # Placeholder
+      availability:
+        timezone: "UTC"
+        working_hours_local: "00:00-23:59"
+        pto: []
