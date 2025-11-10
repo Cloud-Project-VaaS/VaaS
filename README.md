@@ -34,14 +34,24 @@ IssueOps is a GitHub App that automates repository triage and routing with zero 
    - Select the repository (or repositories) you want the app to manage.
    - Click **Install** to confirm.
 
-That is all. The app will start working automatically on the selected repository.
+The app automatically runs every hour, scans the past hour for issues and returns the labels directly to github. The returned labels should look like this 
+![alt text](images/image1.png)
+
+If you want to trigger the pipeline for labels manually for testing purposes use the following link and click the button as shown in image.
+
+**[Dashboard Link](http://13.127.133.1:5000)**
+
+![alt text](images/image2.png)
+
+Contact us for the password for the website and do not share it with others outside your team.
+ 
+Note: Make sure your repo has enough commit history to make the automatic assignment of members to issues possible.
+And do not use forked repos as the commit history contains the members of the public repo and not your accounts.
 
 
 ### 📊 Dashboard / Metrics
 You can view all collected metrics and repository insights on the dashboard. Some metrics are still under development and may not be fully implemented yet:  
-👉 **[Visit Dashboard](http://13.127.133.1:5000)**
 
-The dashboard is password-protected for testing purposes. Please contact the team to obtain access credentials.
 
 The dashboard provides a comprehensive view of your repository’s activity, including:
 
