@@ -3,7 +3,7 @@
 
 ## App details
 
-IssueOps is a GitHub App that automates repository triage and routing with zero manual setup from repository owners. Install it, and the app automatically checks your repository every 10 minutes to detect new issues or updates, then applies predefined automation and checks. Key capabilities:
+IssueOps is a GitHub App that automates repository triage and routing with zero manual setup from repository owners. Install it, and the app automatically checks your repository every hour to detect new issues or updates, then applies predefined automation and checks (to make the testing faster please trigger the pipeline manually from the website). Key capabilities:
 
 - **Automated triage**
   - Classifies new issues using rule based and ML assisted logic.
