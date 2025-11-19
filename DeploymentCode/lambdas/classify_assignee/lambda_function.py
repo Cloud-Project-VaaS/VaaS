@@ -9,9 +9,17 @@ import re
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from decimal import Decimal
+from botocore.config import Config
+
+# --- AWS Clients Configuration ---
+CLIENT_CONFIG = Config(
+    read_timeout=90,
+    connect_timeout=10
+)
 
 # --- AWS Clients (Global) ---
-bedrock_client = boto3.client('bedrock-runtime')
+# [FIX: Removed region_name="us-east-1" to use native region]
+bedrock_client = boto3.client('bedrock-runtime', config=CLIENT_CONFIG)
 dynamodb = boto3.resource('dynamodb')
 secrets_client = boto3.client('secretsmanager')
 eventbridge_client = boto3.client('events')
@@ -23,9 +31,10 @@ USER_AVAILABILITY_TABLE_NAME = os.environ.get("USER_AVAILABILITY_TABLE_NAME")
 SECRET_ARN = os.environ.get('SECRET_ARN')
 INSTALLATIONS_TABLE_NAME = os.environ.get("INSTALLATIONS_TABLE_NAME", "github-installations")
 
+# [FIX: Using your specified DeepSeek model ID]
 LLM_MODEL_ID = "deepseek.v3-v1:0"
 LLM_MAX_RETRIES = 2
-LLM_RETRY_BACKOFF_FACTOR = 0.5
+LLM_RETRY_BACKOFF_FACTOR = 5
 
 # --- Global Variables (Loaded once at cold start) ---
 APP_ID = None
@@ -165,7 +174,6 @@ def get_expertise_context(repo_name: str) -> Tuple[str, List[str]]:
             return "Expertise data is not available for this repo.\n", []
             
         item = response['Item']
-        # --- FIX 2: 'expertise_profiles' is a Map (dict), not a list. ---
         profiles = item.get('expertise_profiles', {})
         
         if not profiles:
@@ -174,9 +182,7 @@ def get_expertise_context(repo_name: str) -> Tuple[str, List[str]]:
         # Format for LLM prompt
         context = "Ranked Expertise Profiles (from repo analysis):\n"
         
-        # --- FIX 2: Iterate over .items() of the dictionary ---
         for login, profile in profiles.items():
-            # 'profile' is now the map containing username, summary, etc.
             handle_at = f"@{login}"
             
             # Create a summary of skills and contribution types for the context
@@ -198,7 +204,6 @@ def get_expertise_context(repo_name: str) -> Tuple[str, List[str]]:
 def get_workload_context(candidate_handles: List[str]) -> str:
     """
     Fetches the current open issue count for each candidate from the IssuesTrackingTable.
-    This relies on the GSI 'by_assignee_and_status'
     """
     if not ISSUES_TABLE_NAME:
         print("Warning: ISSUES_TABLE_NAME not set. Cannot fetch workload.")
@@ -224,7 +229,7 @@ def get_workload_context(candidate_handles: List[str]) -> str:
         print(f"Workload context generated.")
         return context
     except Exception as e:
-        print(f"CRITICAL ERROR fetching workload from IssuesTrackingTable (Is GSI 'by_assignee_and_status' created?): {e}")
+        print(f"CRITICAL ERROR fetching workload from IssuesTrackingTable: {e}")
         return f"Error fetching workload data. GSI may be missing or building.\n"
 
 def run_assignment_llm(issue: Dict, context: str, candidate_handles: List[str]) -> Optional[Dict]:
@@ -235,25 +240,28 @@ def run_assignment_llm(issue: Dict, context: str, candidate_handles: List[str]) 
     
     candidate_list_str = ", ".join([f"'{h}'" for h in candidate_handles])
     
+    # [CHANGE 1 START] - Updated System Prompt to mention Component
     system_prompt = f"""You are a senior engineering manager. Your job is to assign a new GitHub issue to the best possible person from a specific list of candidates.
-You will be given context about the issue, the candidates' expertise, their availability, and current workload.
+You will be given context about the issue (including its Component), the candidates' expertise, their availability, and current workload.
 You must return ONLY a single, valid JSON object with the following keys:
 - "assignee_handle": The GitHub handle of the best person (e.g., "@anil"). MUST be one of the handles from this *exact* list of candidates: [{candidate_list_str}]
-- "labels_to_add": A list of strings for GitHub labels (e.g., ["Bug", "P1"]).
+- "labels_to_add": A list of strings for GitHub labels. This MUST include the issue Type, Priority, and Component (e.g., "Bug", "High", "Frontend") as SEPARATE strings.
 - "reasoning": A brief, professional justification for your choice.
 - "confidence": A float from 0.0 to 1.0.
 
 Use this reasoning process:
-1.  **Expertise:** Use the 'Ranked Expertise Profiles' to find the person with the most relevant skills. This is the most important factor.
+1.  **Expertise:** Match the candidate's skills to the issue's **Component** (e.g., Frontend/Backend). This is the most important factor.
 2.  **Workload:** Use the 'Current Candidate Workload'. If the best expert is overloaded (e.g., > 5 open issues), strongly consider the #2 expert.
 3.  **Availability:** Use the 'Available Team Members' info to see who is online. Prefer users who are within their inferred UTC window.
-4.  **Labels:** The labels to add are *always* the issue `type` and `priority` (e.g., "Bug", "High").
+4.  **Labels:** always return the Type, Priority, and Component as separate labels in the 'labels_to_add' list.
 5.  **Fallback:** If no expert is a good fit or all are overloaded, you MUST still pick the *best available* person from the candidate list. Do not make up a user.
 """
-    
+    # [CHANGE 1 END]
+
     title = issue.get('enriched_title', issue.get('title', 'No Title'))
     body = issue.get('enriched_body', issue.get('body', 'No Body'))
     
+    # [CHANGE 2 START] - Added Component to User Prompt
     user_prompt = f"""--- CONTEXT ---
 {context}
 
@@ -264,6 +272,7 @@ Title: {title}
 Body: {body[:2000]}
 Type: {issue.get('issue_type', 'unknown')}
 Priority: {issue.get('priority', 'unknown')}
+Component: {issue.get('component', 'unknown')} <--- CRITICAL
 
 --- CANDIDATE LIST ---
 You MUST assign this issue to one of: [{candidate_list_str}]
@@ -271,6 +280,7 @@ You MUST assign this issue to one of: [{candidate_list_str}]
 --- YOUR DECISION ---
 Return ONLY the JSON object.
 """
+    # [CHANGE 2 END]
     
     body_obj = {
         "messages": [
@@ -284,6 +294,7 @@ Return ONLY the JSON object.
     
     for attempt in range(LLM_MAX_RETRIES + 1):
         try:
+            print(f"Calling Bedrock... (Attempt {attempt + 1}/{LLM_MAX_RETRIES + 1})")
             response = bedrock_client.invoke_model(
                 modelId=LLM_MODEL_ID,
                 body=json.dumps(body_obj),
@@ -308,6 +319,7 @@ Return ONLY the JSON object.
         except Exception as e:
             print(f"Error calling Bedrock (DeepSeek) on attempt {attempt+1}: {e}")
             if attempt < LLM_MAX_RETRIES:
+                print(f"Sleeping for {LLM_RETRY_BACKOFF_FACTOR} seconds before retry...")
                 time.sleep(LLM_RETRY_BACKOFF_FACTOR)
             
     print(f"Failed to get valid assignment from LLM after {LLM_MAX_RETRIES+1} attempts.")
@@ -326,7 +338,28 @@ def update_github_and_dynamodb(
     issue_id = issue['issue_id']
     assignee_handle_at = decision['assignee_handle']
     assignee_handle_clean = assignee_handle_at.lstrip('@')
-    labels_to_add = decision.get('labels_to_add', [])
+    
+    # [CHANGE 3 START] - Prepare labels separately
+    # We collect all 3 critical labels: Type, Priority, Component
+    # We filter out any that are None, empty, or 'unknown'
+    pipeline_labels = []
+    
+    if issue.get('issue_type') and issue.get('issue_type').lower() != 'unknown':
+        pipeline_labels.append(issue.get('issue_type'))
+        
+    if issue.get('priority') and issue.get('priority').lower() != 'unknown':
+        pipeline_labels.append(issue.get('priority'))
+        
+    if issue.get('component') and issue.get('component').lower() != 'unknown':
+        pipeline_labels.append(issue.get('component'))
+        
+    # Merge with any extra labels LLM might have suggested, ensuring uniqueness
+    llm_labels = decision.get('labels_to_add', [])
+    final_labels = list(set(pipeline_labels + llm_labels))
+    
+    # Ensure we don't send an empty label if something slipped through
+    final_labels = [l for l in final_labels if l]
+    # [CHANGE 3 END]
     
     print(f"Attempting to update GitHub for {repo_name}#{issue_id}...")
     
@@ -340,14 +373,14 @@ def update_github_and_dynamodb(
         
         payload = {
             "assignees": [assignee_handle_clean],
-            "labels": labels_to_add
+            "labels": final_labels
         }
         
         with httpx.Client() as client:
             response = client.patch(api_url, headers=headers, json=payload)
             response.raise_for_status()
         
-        print(f"Successfully updated GitHub issue: assigned to {assignee_handle_at}, added labels {labels_to_add}")
+        print(f"Successfully updated GitHub issue: assigned to {assignee_handle_at}, labels: {final_labels}")
 
     except Exception as e:
         print(f"WARNING: Failed to update GitHub issue {repo_name}#{issue_id}: {e}. Check app permissions.")
@@ -372,12 +405,91 @@ def update_github_and_dynamodb(
                 ':r': decision.get('reasoning', 'N/A'),
                 ':c': Decimal(str(decision.get('confidence', 0.0))),
                 ':at': datetime.now(timezone.utc).isoformat(),
-                ':l': labels_to_add,
+                ':l': final_labels,
                 ':s': 'open',
                 ':lu': datetime.now(timezone.utc).isoformat()
             }
         )
         print("Successfully updated DynamoDB.")
+        
+    except Exception as e:
+        print(f"ERROR: Failed to update DynamoDB for {repo_name}#{issue_id}: {e}")
+
+def update_github_labels_only(
+    issue: Dict,
+    install_token: str,
+    table: Any
+):
+    """
+    Updates GitHub with labels ONLY. Used when no assignees are available.
+    Also updates DynamoDB with the labels and status.
+    """
+    repo_name = issue['repo_name']
+    issue_id = issue['issue_id']
+    
+    # [CHANGE 4 START] - Prepare labels separately here too
+    labels_to_add = []
+    
+    if issue.get('issue_type') and issue.get('issue_type').lower() != 'unknown':
+        labels_to_add.append(issue.get('issue_type'))
+        
+    if issue.get('priority') and issue.get('priority').lower() != 'unknown':
+        labels_to_add.append(issue.get('priority'))
+        
+    if issue.get('component') and issue.get('component').lower() != 'unknown':
+        labels_to_add.append(issue.get('component'))
+    # [CHANGE 4 END]
+    
+    if not labels_to_add:
+        print(f"No valid labels found for {repo_name}#{issue_id}. Nothing to update.")
+        return
+
+    print(f"Attempting to update GitHub labels for {repo_name}#{issue_id}...")
+    
+    # 1. Update GitHub API
+    try:
+        headers = {
+            "Authorization": f"Bearer {install_token}",
+            "Accept": "application/vnd.github.v3+json",
+        }
+        api_url = f"https://api.github.com/repos/{repo_name}/issues/{issue_id}"
+        
+        payload = {
+            "labels": labels_to_add
+            # NO "assignees" key
+        }
+        
+        with httpx.Client() as client:
+            response = client.patch(api_url, headers=headers, json=payload)
+            response.raise_for_status()
+        
+        print(f"Successfully updated GitHub issue: added labels {labels_to_add}")
+
+    except Exception as e:
+        print(f"WARNING: Failed to update GitHub issue {repo_name}#{issue_id} with labels: {e}.")
+
+    # 2. Update DynamoDB
+    print(f"Updating DynamoDB for {repo_name}#{issue_id} (labels only)...")
+    try:
+        table.update_item(
+            Key={
+                'repo_name': repo_name,
+                'issue_id': issue_id
+            },
+            UpdateExpression=(
+                "SET assignment_reason = :r, "
+                "github_labels = :l, #s = :s, "
+                "last_updated_pipeline = :lu"
+            ),
+            ExpressionAttributeNames={"#s": "status"},
+            ExpressionAttributeValues={
+                ':r': 'Pipeline completed. No candidates found in expertise map for assignment.',
+                ':l': labels_to_add,
+                ':s': 'open', # Still open, just not assigned
+                ':lu': datetime.now(timezone.utc).isoformat()
+            }
+        )
+        print("Successfully updated DynamoDB (labels only).")
         
     except Exception as e:
         print(f"ERROR: Failed to update DynamoDB for {repo_name}#{issue_id}: {e}")
@@ -401,9 +513,11 @@ def lambda_handler(event, context):
         
     # --- 2. Parse Event ---
     try:
-        if event.get("source") != "github.issues" or event.get("detail-type") != "issue.batch.prioritized":
-            print(f"Ignoring event from unknown source: {event.get('source')}")
+        # [CHANGE 5 START] - Updated Event Type Check
+        if event.get("source") != "github.issues" or event.get("detail-type") != "issue.batch.component_classified":
+            print(f"Ignoring event from unknown source: {event.get('source')} or type: {event.get('detail-type')}")
             return
+        # [CHANGE 5 END]
             
         repo_name = event['detail'].get('repo_name')
         issues_list = event['detail'].get('issues', [])
@@ -430,6 +544,7 @@ def lambda_handler(event, context):
             install_table = dynamodb.Table(INSTALLATIONS_TABLE_NAME)
             
             try:
+                # Note: This GSI is specified in the context doc.
                 response = install_table.query(
                     IndexName='repo_name-index', 
                     KeyConditionExpression="repo_name = :r",
@@ -449,14 +564,13 @@ def lambda_handler(event, context):
         expertise_context, candidate_handles = get_expertise_context(repo_name)
         
         if not candidate_handles:
-            print(f"No candidates found in RepoExpertise for {repo_name}. Skipping assignment.")
-            return
-            
+            print(f"WARNING: No candidates found in RepoExpertise for {repo_name}. Will proceed to apply labels only.")
+        
         availability_context = get_availability_context(candidate_handles)
         workload_context = get_workload_context(candidate_handles)
         
         final_context = f"{availability_context}\n{expertise_context}\n{workload_context}"
-        print(f"Successfully generated all context for {len(candidate_handles)} candidates.")
+        print(f"Successfully generated all context.")
         
     except Exception as e:
         print(f"FATAL: Failed to prepare context for {repo_name}. Stopping. Error: {e}")
@@ -469,24 +583,30 @@ def lambda_handler(event, context):
     
     for issue in issues_list:
         try:
-            # --- FIX 3: Add 'repo_name' to the issue dict before passing it ---
             issue['repo_name'] = repo_name
             
-            # 1. Get LLM Assignment
-            decision = run_assignment_llm(issue, final_context, candidate_handles)
-            
-            if not decision:
-                print(f"Warning: LLM failed to provide assignment for {issue['issue_id']}. Skipping.")
-                continue
+            if candidate_handles:
+                # --- Path A: Full Assignment (Original Logic) ---
+                decision = run_assignment_llm(issue, final_context, candidate_handles)
+                
+                if not decision:
+                    print(f"Warning: LLM failed to provide assignment for {issue['issue_id']}. Skipping.")
+                    continue
 
-            # 2. Update GitHub and DynamoDB
-            update_github_and_dynamodb(issue, decision, install_token, table)
+                # Update GitHub and DynamoDB
+                update_github_and_dynamodb(issue, decision, install_token, table)
+                
+            else:
+                # --- Path B: Labels Only (New Logic) ---
+                print(f"No candidates for {issue['issue_id']}. Updating labels only.")
+                update_github_labels_only(issue, install_token, table)
 
         except Exception as e:
             print(f"ERROR: Failed to process issue {issue.get('issue_id')}: {e}")
             import traceback
             traceback.print_exc() # Print full error for debugging
             continue
-            
+    
+    # [CRITICAL FIX] Loop stopped by removing event emission here
     print(f"Successfully processed batch for {repo_name}.")
     return {'statusCode': 200, 'body': 'Batch assignment complete.'}
