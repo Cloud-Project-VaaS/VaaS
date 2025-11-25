@@ -112,8 +112,8 @@ def fetch_new_issues(repo_name, token):
     print(f"Fetching new issues for {repo_name}...")
     
     # We look back 70 minutes to ensure we don't miss anything from the 1-hour schedule
-    # since_time = (datetime.now(timezone.utc) - timedelta(minutes=70)).isoformat()
-    since_time = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    since_time = (datetime.now(timezone.utc) - timedelta(minutes=70)).isoformat()
+    # since_time = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 
     
     headers = {
@@ -148,8 +148,8 @@ def fetch_new_issues(repo_name, token):
             # Only process issues *created* since the 'since' time.
             # The 'since' param is for *updates*, so we must double-check creation.
             created_at = datetime.fromisoformat(issue['created_at'])
-            # if created_at < (datetime.now(timezone.utc) - timedelta(minutes=70)):
-            if created_at < (datetime.now(timezone.utc) - timedelta(days=7)):
+            if created_at < (datetime.now(timezone.utc) - timedelta(minutes=70)):
+            # if created_at < (datetime.now(timezone.utc) - timedelta(days=7)):
                 continue
 
             # This is a brand new issue. Let's process it.

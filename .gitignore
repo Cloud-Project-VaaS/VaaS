@@ -27,5 +27,8 @@ DeploymentCode/lambdas/*/*
 
 # ...AND, do NOT ignore the .zip deployment packages (optional, but good to track)
 !DeploymentCode/lambdas/*/*.zip
-
+!DeploymentCode/lambdas/Old_Lambda_Functions/*
+!DeploymentCode/Website_Code/*
 DeploymentCode/lambdas/classify_assignee/threadpoolctl.py
+
+typing_extensions.py

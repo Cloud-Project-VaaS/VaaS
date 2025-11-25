@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 
 # --- 1. ENVIRONMENT & CONFIG ---
-LLM_MODEL_ID = os.environ.get("LLM_MODEL_ID", "deepseek.v3-v1:0") 
+LLM_MODEL_ID = os.environ.get("LLM_MODEL_ID", "mistral.mistral-7b-instruct-v0:2") 
 BEDROCK_REGION = os.environ.get("BEDROCK_REGION", "ap-south-1") 
 SECRET_ARN = os.environ.get('SECRET_ARN') # <-- THIS MUST BE SET
 # --- NEW: Add table name as environment variable ---
@@ -21,7 +21,8 @@ INSTALLATIONS_TABLE_NAME = os.environ.get("INSTALLATIONS_TABLE_NAME", "github-in
 EXPERTISE_TABLE_NAME = os.environ.get("EXPERTISE_TABLE_NAME", "RepoExpertise")
 
 # --- 2. TUNING PARAMETERS ---
-ACTIVITY_THRESHOLD = 2 # Min contributions to be "active" (from test_function.py)
+# CHANGE: Increased threshold to 5 as requested (Total commits + PRs + Issues > 5)
+ACTIVITY_THRESHOLD = 5 
 MAX_COMMITS_TO_FETCH_DETAILS = 30
 MAX_LLM_CONCURRENCY = 5
 MAX_BATCH_CONTRIBUTIONS = 25
@@ -59,7 +60,6 @@ def load_secrets():
         print(f"Error getting installation token: {e}")
         raise
 
-# --- NEW FUNCTIONS: Add the missing auth helpers here ---
 def create_app_jwt(private_key_pem, app_id):
     """Creates a short-lived JWT (10 min) to authenticate as the GitHub App."""
     now = int(time.time())
@@ -170,7 +170,7 @@ def lambda_handler(event, context):
             'body': json.dumps(f"Internal server error: {str(e)}")
         }
 
-# --- NEW: Full Scan Orchestrator ---
+# --- Full Scan Orchestrator ---
 def get_all_installed_repos():
     """Scans the DynamoDB table to get all installation/repo pairs."""
     table = dynamodb.Table(INSTALLATIONS_TABLE_NAME)
@@ -248,7 +248,7 @@ def clean_text(text):
     if not text:
         return ""
     text = text.lower()
-    text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
+    text = re.sub(r'', '', text, flags=re.DOTALL)
     text = re.sub(r'[^\x00-\x7F]+', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
@@ -340,8 +340,10 @@ def get_github_activity(repo_name, install_token, days_to_scan):
             assignee_username = assignee.get('login') if assignee else None
             add_compressed_activity(assignee_username, pr, "pull_request", "assignee")
 
-    # --- NEW SECTION: Fetch all contributors as a fallback ---
-    print(f"Fetching full contributor list for {repo_name} as fallback...")
+    # --- UPDATED SECTION: Fetch all contributors and their commit counts ---
+    print(f"Fetching full contributor list for {repo_name} as fallback and for commit counts...")
+    user_commit_counts = {}
+    
     try:
         contrib_url = f"https://api.github.com/repos/{repo_name}/contributors"
         # We ask for anon=false to ensure we only get logged-in users
@@ -356,18 +358,22 @@ def get_github_activity(repo_name, install_token, days_to_scan):
             if not username or "bot" in username.lower():
                 continue
             
-            # If they are not already in our map from PRs/Issues, add them.
+            # CHANGE: Capture commit count
+            user_commit_counts[username] = contributor.get('contributions', 0)
+            
+            # If they are not already in our map from PRs/Issues, add them with empty list
             if username not in user_activity_map:
-                user_activity_map[username] = [] # Initialize with empty activity
+                user_activity_map[username] = [] 
                 
-        print(f"Found {len(contributors)} total contributors. Map now has {len(user_activity_map)} users.")
+        print(f"Found {len(contributors)} total contributors.")
         
     except requests.exceptions.RequestException as e:
         print(f"Warning: Could not fetch contributor list. Error: {e}")
-    # --- END OF NEW SECTION ---
+    # --- END OF UPDATED SECTION ---
 
     print(f"Fetched and compressed PR/Issue activity for {len(user_activity_map)} contributors.")
-    return user_activity_map
+    # CHANGE: Return both maps
+    return user_activity_map, user_commit_counts
 
 # --- 8. ASYNC PROFILE & COMMIT FETCHING ---
 async def fetch_repo_languages(client, repo_name, headers):
@@ -437,7 +443,6 @@ async def fetch_commit_details_concurrently(commit_shas, repo_name, headers):
         return []
         
     all_files = set()
-    # --- MODIFICATION: Removed http2=True ---
     async with httpx.AsyncClient() as client:
         tasks = [fetch_one_commit_detail(client, sha, repo_name, headers) for sha in commit_shas]
         results = await asyncio.gather(*tasks)
@@ -448,23 +453,26 @@ async def fetch_commit_details_concurrently(commit_shas, repo_name, headers):
     return list(all_files)
 
 # --- 9. PYTHON-BASED FILTERING & SORTING (UPDATED) ---
-def preprocess_and_filter(user_activity_map):
+def preprocess_and_filter(user_activity_map, user_commit_counts):
     print("Preprocessing, filtering, and sorting users...")
     
     final_profiles = {}
     active_users_with_data = []
 
     for username, activity_list in user_activity_map.items():
-        count = len(activity_list)
+        # Get count of PRs + Issues
+        issue_pr_count = len(activity_list)
+        # Get count of Commits (from contributors API)
+        commit_count = user_commit_counts.get(username, 0)
         
-        # --- NEW FILTER ADDED (from test_function.py) ---
-        # Skip user if they are inactive (<= 2 contributions)
-        if count <= ACTIVITY_THRESHOLD:
+        total_activity = issue_pr_count + commit_count
+        
+        # --- UPDATED FILTER (Total Commits + PRs + Issues > Threshold) ---
+        if total_activity <= ACTIVITY_THRESHOLD:
             continue
-        # --- END OF NEW FILTER ---
+        # --- END OF FILTER ---
         
-        # --- User is ACTIVE if we reach this point ---
-        if count > 15:
+        if total_activity > 20:
             role = "Core Maintainer"
         else:
             role = "Active Contributor" 
@@ -475,7 +483,8 @@ def preprocess_and_filter(user_activity_map):
             "profile_summary": {},
             "repo_context": {},
             "activity_summary": {
-                "total_contributions": count,
+                "total_contributions": total_activity,
+                "commits_count": commit_count, # Added this for clarity
                 "issues_closed": len([item for item in activity_list if item['type'] == 'issue']),
                 "prs_merged": len([item for item in activity_list if item['type'] == 'pull_request'])
             },
@@ -493,14 +502,15 @@ def preprocess_and_filter(user_activity_map):
         reverse=True
     )
     
-    # --- MODIFIED PRINT STATEMENT ---
     print(f"Filtered {len(user_activity_map)} total users. Found {len(active_users_with_data)} active contributors (>{ACTIVITY_THRESHOLD} contributions).")
     return final_profiles, active_users_with_data
 
 # --- 10. COMMIT COMPRESSION & DYNAMIC BATCHING ---
 def compress_commit_data(commit_messages, file_paths):
+    # Clean all messages
     cleaned_messages = [clean_text(msg) for msg in commit_messages]
     
+    # Still extract keywords for high-level context
     keywords = set()
     keyword_regex = re.compile(
         r'\b(fix|feat|refactor|docs|test|style|chore|build|ci|perf|revert|autotuner|gpu|cuda|tpu|keras|model)\b', 
@@ -522,10 +532,10 @@ def compress_commit_data(commit_messages, file_paths):
 
     return {
         "keywords": list(keywords),
-        "file_paths": file_paths,
+        "file_paths": file_paths, # The LLM will see specific files touched
         "common_dirs": list(dirs),
         "common_extensions": list(extensions),
-        "message_samples": cleaned_messages[:3]
+        "recent_commit_messages": cleaned_messages 
     }
 
 def create_dynamic_batches(sorted_active_users, all_profiles, all_user_commits_data):
@@ -541,6 +551,7 @@ def create_dynamic_batches(sorted_active_users, all_profiles, all_user_commits_d
         
         username = active_user_list.pop(0)
         user_profile = all_profiles[username]
+        # Use simple issue/pr count for weight, or total. Total is safer for batching.
         count = user_profile['activity_summary']['total_contributions']
         
         commit_messages, file_paths = all_user_commits_data.get(username, ([], []))
@@ -619,7 +630,16 @@ def invoke_llm_batch(batch_data, prompt_template_str):
     user_prompt = json.dumps(batch_data, indent=2)
     
     body_obj = {}
-    if "anthropic.claude" in LLM_MODEL_ID:
+    if "mistral" in LLM_MODEL_ID:
+        # Mistral Instruct format: <s>[INST] Instruction\n\nInput [/INST]
+        final_prompt = f"<s>[INST] {system_prompt}\n\n{user_prompt} [/INST]"
+        body_obj = {
+            "prompt": final_prompt,
+            "max_tokens": 4096,
+            "temperature": 0.1,
+            "top_p": 0.9
+        }
+    elif "anthropic.claude" in LLM_MODEL_ID:
         messages = [{"role": "user", "content": user_prompt}]
         body_obj = {
             "messages": messages,
@@ -653,7 +673,9 @@ def invoke_llm_batch(batch_data, prompt_template_str):
         response_body = json.loads(response.get('body').read())
         
         raw_output = ""
-        if "anthropic.claude" in LLM_MODEL_ID:
+        if "mistral" in LLM_MODEL_ID:
+            raw_output = response_body.get('outputs', [{}])[0].get('text', '')
+        elif "anthropic.claude" in LLM_MODEL_ID:
             raw_output = response_body.get('content', [{}])[0].get('text', '')
         elif "openai.gpt-oss-120b" in LLM_MODEL_ID or "deepseek" in LLM_MODEL_ID:
             raw_output = response_body.get('choices', [{}])[0].get('message', {}).get('content', '')
@@ -680,7 +702,16 @@ def generate_team_structure_analysis(active_profiles_data, system_prompt):
     user_prompt = json.dumps(active_profiles_data, indent=2)
     
     body_obj = {}
-    if "anthropic.claude" in LLM_MODEL_ID:
+    if "mistral" in LLM_MODEL_ID:
+        # Mistral Instruct format
+        final_prompt = f"<s>[INST] {system_prompt}\n\n{user_prompt} [/INST]"
+        body_obj = {
+            "prompt": final_prompt,
+            "max_tokens": 4096,
+            "temperature": 0.1,
+            "top_p": 0.9
+        }
+    elif "anthropic.claude" in LLM_MODEL_ID:
         messages = [{"role": "user", "content": user_prompt}]
         body_obj = {
             "messages": messages,
@@ -714,7 +745,9 @@ def generate_team_structure_analysis(active_profiles_data, system_prompt):
         response_body = json.loads(response.get('body').read())
         
         raw_output = ""
-        if "anthropic.claude" in LLM_MODEL_ID:
+        if "mistral" in LLM_MODEL_ID:
+            raw_output = response_body.get('outputs', [{}])[0].get('text', '')
+        elif "anthropic.claude" in LLM_MODEL_ID:
             raw_output = response_body.get('content', [{}])[0].get('text', '')
         elif "openai.gpt-oss-120b" in LLM_MODEL_ID or "deepseek" in LLM_MODEL_ID:
             raw_output = response_body.get('choices', [{}])[0].get('message', {}).get('content', '')
@@ -756,7 +789,8 @@ async def main(repo_name, install_token, days_to_scan):
                 return await asyncio.to_thread(invoke_llm_batch, batch, prompt_template)
         
         # --- PASS 0: Fetch & Preprocess (Python) ---
-        user_activity_map = get_github_activity(repo_name, install_token, days_to_scan)
+        # CHANGE: unpack both user_activity and commit_counts
+        user_activity_map, user_commit_counts = get_github_activity(repo_name, install_token, days_to_scan)
         
         if not user_activity_map:
             print("No activity found. Exiting.")
@@ -773,7 +807,8 @@ async def main(repo_name, install_token, days_to_scan):
             return
 
         # --- PASS 0.1: Filter & Sort (Python) ---
-        final_profiles, sorted_active_users = preprocess_and_filter(user_activity_map)
+        # CHANGE: Pass both maps to filter function
+        final_profiles, sorted_active_users = preprocess_and_filter(user_activity_map, user_commit_counts)
         
         if not final_profiles:
             print(f"No active contributors found with >{ACTIVITY_THRESHOLD} contributions. Exiting.")
@@ -799,7 +834,6 @@ async def main(repo_name, install_token, days_to_scan):
         
         all_user_commits_data = {}
 
-        # --- MODIFICATION: Removed http2=True ---
         async with httpx.AsyncClient() as client:
             # 1. Fetch languages, profiles, and commit lists concurrently
             lang_task = fetch_repo_languages(client, repo_name, auth_headers)
@@ -899,10 +933,6 @@ async def main(repo_name, install_token, days_to_scan):
         print("="*50)
         
         # --- HIERARCHY FIX ---
-        # We now pass the *entire* rich output from Pass 1 ('for_output_pass_1')
-        # to the Pass 2 LLM. This gives the model all the context (bios,
-        # activity counts, skills) it needs to infer a proper hierarchy.
-        
         print(f"Sending {len(for_output_pass_1)} active profiles to Pass 2...")
 
         if not for_output_pass_1:
@@ -911,7 +941,7 @@ async def main(repo_name, install_token, days_to_scan):
         else:
             llm_team_analysis = await asyncio.to_thread(
                 generate_team_structure_analysis, 
-                for_output_pass_1,  # <-- This is the new, rich input
+                for_output_pass_1, 
                 pass_2_prompt
             )
         # --- END HIERARCHY FIX ---
