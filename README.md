@@ -8,7 +8,7 @@
 
 ##  Key Features
 
-### 🤖 Automated Triage & Classification
+### Automated Triage & Classification
 - **Smart Component Detection**: Uses LLMs to analyze issue content and classify it into one of 7 distinct components:
   - **Frontend** 
   - **Backend** 
@@ -22,19 +22,19 @@
 
 - **Spam Filtering**: Automatically flags and closes spam or low-quality issues.
 
-### 🧠 Intelligent Routing
+### Intelligent Routing
 - **Expertise Matching**: Routes issues to the best-suited maintainer based on their past contributions and skills.
 - **Availability-Aware**: Checks team availability (working hours) before assigning tasks to prevent burnout.
 - **Dynamic Learning**: Continuously updates contributor profiles based on their latest activity.
 
-### 📊 Interactive Dashboard
+### Interactive Dashboard
 - **Real-time Metrics**: View issue trends, closure rates, and backlog health.
 - **Team Management**: Manage roles, skills, and working hours for all contributors.
 - **Manual Triggers**: Manually trigger scans and pipeline runs for testing and immediate updates.
 
 ---
 
-## 🛠️ Architecture & Tech Stack
+## Architecture & Tech Stack
 
 Built with a modern, serverless-first architecture:
 
@@ -45,7 +45,7 @@ Built with a modern, serverless-first architecture:
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### 1. Install the GitHub App
 1.  Navigate to the **[App Installation Page](https://github.com/apps/ds252-issueops)**.
@@ -65,7 +65,7 @@ The dashboard provides deep insights and control over the automation.
 
 ---
 
-## 📸 Screenshots
+## Screenshots
 
 ### Automated Labeling in Action
 The bot automatically analyzes and labels issues directly on GitHub.
@@ -74,7 +74,3 @@ The bot automatically analyzes and labels issues directly on GitHub.
 
 
 ---
-
-<p align="center">
-  Made with ❤️ by the IssueOps Team
-</p>
