@@ -61,11 +61,11 @@ The dashboard provides deep insights and control over the automation.
     - Update team expertise profiles.
     - Dedicated button for manual issue scans.
 
+## Screenshots
 ![Dashboard Preview](images/image2.png)
 
 ---
 
-## Screenshots
 
 ### Automated Labeling in Action
 The bot automatically analyzes and labels issues directly on GitHub.
