@@ -1,74 +1,80 @@
-# GitHub App — IssueOps
+#  IssueOps: Intelligent Repository Management
 
+> **Automate Triage. Optimize Routing. Empower Teams.**
 
-## App details
+**IssueOps** is a comprehensive GitHub App and Dashboard solution designed to streamline your development workflow. By leveraging Machine Learning and intelligent routing, it automates the tedious parts of issue management, allowing your team to focus on what matters: **writing code**.
 
-IssueOps is a GitHub App that automates repository triage and routing with zero manual setup from repository owners. Install it, and the app automatically checks your repository every hour to detect new issues or updates, then applies predefined automation and checks (to make the testing faster please trigger the pipeline manually from the website). Key capabilities:
+---
 
-- **Automated triage**
-  - Classifies new issues using rule based and ML assisted logic.
-  - Applies labels, templates, and priority tags automatically.
+##  Key Features
 
-- **Routing and Analysis**
-  - Matches issues to maintainers or teams using mapping rules.
-  - Automatically assigns or notifies the correct owner when an issue is opened.
-  - Adds or updates labels, and closes or flags stale or duplicate issues according to policy.
-  - Sends aggregated metrics to the project dashboard for instructors or maintainers to review.
+### 🤖 Automated Triage & Classification
+- **Smart Component Detection**: Uses LLMs to analyze issue content and classify it into one of 7 distinct components:
+  - **Frontend** 
+  - **Backend** 
+  - **Database** 
+  - **DevOps** 
+  - **Mobile** 
+  - **Documentation** 
+  - **Security** 
+- **Issue Type Classification**: Automatically categorizes issues into **Bug**, **Enhancement**, or **Question**.
+- **Priority Assignment**: Analyzes urgency to assign priority levels (High, Medium, Low).
 
-- **Security and privacy**
-  - Only accesses repositories you explicitly select during installation.
-  - Does not require repository owners to add files, change code, or run local scripts.
+- **Spam Filtering**: Automatically flags and closes spam or low-quality issues.
+
+### 🧠 Intelligent Routing
+- **Expertise Matching**: Routes issues to the best-suited maintainer based on their past contributions and skills.
+- **Availability-Aware**: Checks team availability (working hours) before assigning tasks to prevent burnout.
+- **Dynamic Learning**: Continuously updates contributor profiles based on their latest activity.
+
+### 📊 Interactive Dashboard
+- **Real-time Metrics**: View issue trends, closure rates, and backlog health.
+- **Team Management**: Manage roles, skills, and working hours for all contributors.
+- **Manual Triggers**: Manually trigger scans and pipeline runs for testing and immediate updates.
+
+---
+
+## 🛠️ Architecture & Tech Stack
+
+Built with a modern, serverless-first architecture:
+
+- **Core Logic**: AWS Lambda (Python)
+- **Database**: Amazon DynamoDB
+- **Frontend/Dashboard**: Streamlit
+- **Infrastructure**: AWS (AP-South-1)
+
+---
+
+## 🚀 Getting Started
+
+### 1. Install the GitHub App
+1.  Navigate to the **[App Installation Page](https://github.com/apps/ds252-issueops)**.
+2.  Click **Install** and select the repositories you want to manage.
+3.  *That's it!* The app will start scanning for new issues every hour.
+
+### 2. Access the Dashboard
+The dashboard provides deep insights and control over the automation.
+
+- **URL**: `http://65.0.75.51:8501/` 
+- **Features**:
+    - Visualize issue distribution.
+    - Update team expertise profiles.
+    - Dedicated button for manual issue scans.
+
+![Dashboard Preview](images/image2.png)
+
+---
+
+## 📸 Screenshots
+
+### Automated Labeling in Action
+The bot automatically analyzes and labels issues directly on GitHub.
+![GitHub Bot Action](images/image1.png)
+
 
 
 ---
 
-## How to use the app
-
-### 🚀 Installation Steps
-1. Click the installation link:  
-   👉 **[Install the App](https://github.com/apps/ds252-issueops)**
-
-2. On the GitHub page:
-   - Click **Install**.
-   - Choose **"Only select repositories"**.
-   - Select the repository (or repositories) you want the app to manage.
-   - Click **Install** to confirm.
-
-The app automatically runs every hour, scans the past hour for issues and returns the labels directly to github. The returned labels should look like this 
-![alt text](images/image1.png)
-
-If you want to trigger the pipeline for labels manually for testing purposes use the following link and click the button as shown in image.
-
-**[Dashboard Link](http://13.127.133.1:5000)**
-
-![alt text](images/image2.png)
-
-Contact us for the password for the website and do not share it with others outside your team.
- 
-Note: Make sure your repo has enough commit history to make the automatic assignment of members to issues possible.
-And do not use forked repos as the commit history contains the members of the public repo and not your accounts.
-
-
-### 📊 Dashboard / Metrics
-You can view all collected metrics and repository insights on the dashboard. Some metrics are still under development and may not be fully implemented yet:  
-
-
-The dashboard provides a comprehensive view of your repository’s activity, including:
-
-- **📈 Issue Overview** — total issues created, open issues, closed issues, stale issues, and pull request counts.  
-- **👥 Contributors & Activity** — active contributors, last activity date, and activity trends.  
-- **🧩 Issue Distribution** — visual breakdown of issues by **priority level** and **category** (e.g., bug, enhancement, question).  
-- **📅 Trends** — timeline view showing activity frequency over time.  
-- **🗂️ Issues Table (Filtered)** — complete table of issues with details such as ID, title, label, priority, assignee, status, and timestamps.
-
-This dashboard updates automatically every few minutes as the app gathers new data from your repository.
-
-
-
-### Troubleshooting & contact
-If the app does not appear or automation is not running:
-- Confirm you installed it on the correct repository.
-- Confirm the app has the permissions above.
-- If you face any issues please contact our team.
-
----
+<p align="center">
+  Made with ❤️ by the IssueOps Team
+</p>
