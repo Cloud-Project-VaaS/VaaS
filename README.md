@@ -108,6 +108,22 @@ A centralized interface for administration and visibility.
   - **Visualization:** View distribution metrics for issue types and priorities.
   - **Management:** Manually edit AI-inferred expertise and working hours.
   - **Manual Triggers:** Immediately trigger the classification pipeline for a specific repository on-demand.
+---
+## Architecture Diagrams
+
+![Installation Pipeline](images/Installation_Pipeline.svg)
+
+---
+
+![Issue Classifying Pipeline](images/Issue Classifying Pipeline.svg)
+
+---
+
+![Sla and Stale Issue Pipeline](images/SLA and Stale Pipeline.svg)
+
+---
+
+![Dashboard Running](images/Dashboard.svg)
 
 ---
 ## Getting Started
