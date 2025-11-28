@@ -138,6 +138,32 @@ The dashboard provides deep insights and control over the automation.
 The bot automatically analyzes and labels issues directly on GitHub.
 ![GitHub Bot Action](images/image1.png)
 
+---
 
+## Project Contributions
+
+**Sai Harsh:**
+- **Infrastructure & Deployment:** Architected and deployed the entire Serverless AWS infrastructure, including 10+ Lambda functions, EventBridge rules, and DynamoDB tables.
+- **Intelligence Engine:** Built the Expertise Scanner (Mistral 7B) to infer developer skills from commit history and the Availability Inference engine to calculate working hours from activity timestamps.
+- **Control Plane (Dashboard):** Developed the full Streamlit Dashboard, implementing GitHub OAuth security, the "Manual Trigger" system, and the Team Management interface.
+- **Maintenance Automation:** Created the SLA & Stale Issue Handler to automatically police repository hygiene (auto-closing stale issues, pinging on SLA breaches).
+- **Assignment Execution:** Wrote the "Master Agent" logic that synthesizes data from all pipelines to make the final API calls to GitHub (Labeling & Assigning).
+- **Ingestion Logic:** Co-developed the initial fetch/ingest logic to ensure scalable data intake.
+- **Installation Management:** Implemented the Installation Manager Lambda function to handle GitHub App installation and uninstallation webhooks, ensuring the system dynamically tracks repositories.
+
+**Vinay:**
+- **Spam Detection:** Implemented the Llama 3-based spam filtering system to sanitize incoming issues.
+- **Metadata Enrichment:** Developed the prompt engineering and logic to rewrite vague issue titles/bodies for clarity and better accuracy of the next agents in the pipeline.
+- **Classification Models:** Built and integrated the classification logic for:
+  - **Issue Type** (Bug vs. Feature)
+  - **Priority** (High/Medium/Low)
+  - **Component Detection** (Frontend/Backend/Infra)
+- **Frontend Components:** Contributed to the design and layout components of the Streamlit user interface.
+
+**Ashwin:**
+- **Issue Intake:** Co-developed the core logic for fetching and parsing raw issues from the GitHub API.
+- **Assignment Algorithms:** Worked on the decision-making algorithms used to filter potential assignees based on workload.
+- **Duplicate Detection (Prototype):** Developed logic to identify potential duplicate issues for specific repositories. While repo-specific constraints prevented full app integration, this work lay the groundwork for future duplicate detection features.
+- **SLA Logic Design:** Contributed to the design of the Service Level Agreement (SLA) logic and thresholds used for issue monitoring.
 
 ---
