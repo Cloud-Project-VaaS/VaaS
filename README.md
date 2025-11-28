@@ -148,22 +148,21 @@ The bot automatically analyzes and labels issues directly on GitHub.
 - **Control Plane (Dashboard):** Developed the full Streamlit Dashboard, implementing GitHub OAuth security, the "Manual Trigger" system, and the Team Management interface.
 - **Maintenance Automation:** Created the SLA & Stale Issue Handler to automatically police repository hygiene (auto-closing stale issues, pinging on SLA breaches).
 - **Assignment Execution:** Wrote the "Master Agent" logic that synthesizes data from all pipelines to make the final API calls to GitHub (Labeling & Assigning).
-- **Ingestion Logic:** Co-developed the initial fetch/ingest logic to ensure scalable data intake.
-- **Installation Management:** Implemented the Installation Manager Lambda function to handle GitHub App installation and uninstallation webhooks, ensuring the system dynamically tracks repositories.
+- **Installation Management:** Implemented the Installation Manager Lambda function to handle GitHub App installation and uninstallation webhooks.
 
 **Vinay:**
 - **Spam Detection:** Implemented the Llama 3-based spam filtering system to sanitize incoming issues.
 - **Metadata Enrichment:** Developed the prompt engineering and logic to rewrite vague issue titles/bodies for clarity and better accuracy of the next agents in the pipeline.
 - **Classification Models:** Built and integrated the classification logic for:
-  - **Issue Type** (Bug vs. Feature)
+  - **Issue Type** (Bug/Enhancement/Question)
   - **Priority** (High/Medium/Low)
-  - **Component Detection** (Frontend/Backend/Infra)
+  - **Component Detection** (Frontend/Backend/Infra etc)
 - **Frontend Components:** Contributed to the design and layout components of the Streamlit user interface.
 
 **Ashwin:**
-- **Issue Intake:** Co-developed the core logic for fetching and parsing raw issues from the GitHub API.
+- **Issue Intake:** Co-developed (Sai Harsh) the core logic for fetching and parsing raw issues from the GitHub API.
 - **Assignment Algorithms:** Worked on the decision-making algorithms used to filter potential assignees based on workload.
-- **Duplicate Detection (Prototype):** Developed logic to identify potential duplicate issues for specific repositories. While repo-specific constraints prevented full app integration, this work lay the groundwork for future duplicate detection features.
+- **Duplicate Detection (Prototype):** Developed logic to identify potential duplicate issues, but for specific repositories, hence not implemented.
 - **SLA Logic Design:** Contributed to the design of the Service Level Agreement (SLA) logic and thresholds used for issue monitoring.
 
 ---
