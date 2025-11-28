@@ -142,7 +142,7 @@ The bot automatically analyzes and labels issues directly on GitHub.
 
 ## Project Contributions
 
-**Sai Harsh:**
+**Sai Harsh (saiharsh@iisc.ac.in):**
 - **Infrastructure & Deployment:** Architected and deployed the entire Serverless AWS infrastructure, including 10+ Lambda functions, EventBridge rules, and DynamoDB tables.
 - **Intelligence Engine:** Built the Expertise Scanner (Mistral 7B) to infer developer skills from commit history and the Availability Inference engine to calculate working hours from activity timestamps.
 - **Control Plane (Dashboard):** Developed the full Streamlit Dashboard, implementing GitHub OAuth security, the "Manual Trigger" system, and the Team Management interface.
@@ -150,7 +150,7 @@ The bot automatically analyzes and labels issues directly on GitHub.
 - **Assignment Execution:** Wrote the "Master Agent" logic that synthesizes data from all pipelines to make the final API calls to GitHub (Labeling & Assigning).
 - **Installation Management:** Implemented the Installation Manager Lambda function to handle GitHub App installation and uninstallation webhooks.
 
-**Vinay:**
+**Vinay (vinay2023@iisc.ac.in):**
 - **Spam Detection:** Implemented the Llama 3-based spam filtering system to sanitize incoming issues.
 - **Metadata Enrichment:** Developed the prompt engineering and logic to rewrite vague issue titles/bodies for clarity and better accuracy of the next agents in the pipeline.
 - **Classification Models:** Built and integrated the classification logic for:
@@ -159,10 +159,16 @@ The bot automatically analyzes and labels issues directly on GitHub.
   - **Component Detection** (Frontend/Backend/Infra etc)
 - **Frontend Components:** Contributed to the design and layout components of the Streamlit user interface.
 
-**Ashwin:**
+**Ashwin (ashwinkm@iisc.ac.in):**
 - **Issue Intake:** Co-developed (Sai Harsh) the core logic for fetching and parsing raw issues from the GitHub API.
 - **Assignment Algorithms:** Worked on the decision-making algorithms used to filter potential assignees based on workload.
 - **Duplicate Detection (Prototype):** Developed logic to identify potential duplicate issues, but for specific repositories, hence not implemented.
 - **SLA Logic Design:** Contributed to the design of the Service Level Agreement (SLA) logic and thresholds used for issue monitoring.
+
+---
+
+## Acknowledgements
+This project was done as part of the **DS252 Introduction to Cloud Computing** (Aug, 2025) course. 
+We acknowledge the use of AI coding assistants (GitHub Copilot, ChatGPT, Gemini) to accelerate development, debug infrastructure code, and generate boilerplate for standard AWS patterns.
 
 ---
