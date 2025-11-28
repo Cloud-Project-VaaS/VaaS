@@ -115,11 +115,11 @@ A centralized interface for administration and visibility.
 
 ---
 
-![Issue Classifying Pipeline](images/Issue Classifying Pipeline.svg)
+![Issue Classifying Pipeline](images/Issue_Classifying_Pipeline.svg)
 
 ---
 
-![Sla and Stale Issue Pipeline](images/SLA and Stale Pipeline.svg)
+![Sla and Stale Issue Pipeline](images/SLA_and_Stale_Pipeline.svg)
 
 ---
 
