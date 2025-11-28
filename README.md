@@ -169,6 +169,7 @@ The bot automatically analyzes and labels issues directly on GitHub.
 
 ## Acknowledgements
 This project was done as part of the **DS252 Introduction to Cloud Computing** (Aug, 2025) course. 
+
 We acknowledge the use of AI coding assistants (GitHub Copilot, ChatGPT, Gemini) to accelerate development, debug infrastructure code, and generate boilerplate for standard AWS patterns.
 
 ---
