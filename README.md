@@ -37,39 +37,39 @@
 ## Architecture & Tech Stack
 This project is built on a modern, 100% serverless, event-driven architecture designed for scalability, security, and low operational overhead.
 
-### Core Architecture
-Provider: Amazon Web Services (AWS)
-Pattern: Event-Driven / Asynchronous
-Identity: GitHub App (JWT-based authentication)
+### **Core Architecture**
+- Provider: Amazon Web Services (AWS)
+- Pattern: Event-Driven / Asynchronous
+- Identity: GitHub App (JWT-based authentication)
 
-### Tech Stack
+### **Tech Stack**
 #### Compute & Logic
-AWS Lambda (Python 3.12): Handles all core logic, including issue fetching, classification, assignment, and SLA enforcement.
+- AWS Lambda (Python 3.12): Handles all core logic, including issue fetching, classification, assignment, and SLA enforcement.
 
 #### Orchestration & Events
-Amazon EventBridge: Manages the event bus that decouples the pipeline (e.g., issue.batch.new triggers classify_spam).
-Scheduled Rules: Triggers hourly ingestion jobs and daily SLA checks.
+- Amazon EventBridge: Manages the event bus that decouples the pipeline (e.g., issue.batch.new triggers classify_spam).
+- Scheduled Rules: Triggers hourly ingestion jobs and daily SLA checks.
 
 #### Data Storage
-Amazon DynamoDB: Serves as the single source of truth for:
-Issues: Tracking lifecycle, labels, and assignment (IssuesTrackingTable).
-Intelligence: Storing inferred expertise and team availability (RepoExpertise, UserAvailability).
-Installations: Managing active GitHub App installations (github-installations).
+- Amazon DynamoDB: Serves as the single source of truth for:
+- Issues: Tracking lifecycle, labels, and assignment (IssuesTrackingTable).
+- Intelligence: Storing inferred expertise and team availability (RepoExpertise, UserAvailability).
+- Installations: Managing active GitHub App installations (github-installations).
 
 #### Intelligence & AI
-AWS Bedrock: Provides access to Foundational Models.
-Mistral 7B Instruct (v0:2): Used for inferring developer expertise and team structures.
-Llama 3 8B Instruct: Used for spam filtering and metadata enrichment (rewriting titles/bodies).
-DeepSeek V3: Powering the "Master Agent" for final issue assignment decisions.
+- AWS Bedrock: Provides access to Foundational Models.
+- Mistral 7B Instruct (v0:2): Used for inferring developer expertise and team structures.
+- Llama 3 8B Instruct: Used for spam filtering and metadata enrichment (rewriting titles/bodies).
+- DeepSeek V3: Powering the "Master Agent" for final issue assignment decisions.
 
 #### Security
-AWS Secrets Manager: Securely stores GitHub App private keys and OAuth client secrets.
-IAM Roles: Least-privilege roles assigned to each Lambda function and the EC2 instance.
+- AWS Secrets Manager: Securely stores GitHub App private keys and OAuth client secrets.
+- IAM Roles: Least-privilege roles assigned to each Lambda function and the EC2 instance.
 
 #### Frontend / Control Plane
-Streamlit: A Python-based dashboard for monitoring, configuration, and manual triggers.
-Amazon EC2 (t3.small): Hosts the dashboard, secured with an IAM Instance Profile.
-GitHub OAuth: Authenticates admin users and authorizes access based on repository permissions.
+- Streamlit: A Python-based dashboard for monitoring, configuration, and manual triggers.
+- Amazon EC2 (t3.small): Hosts the dashboard, secured with an IAM Instance Profile.
+- GitHub OAuth: Authenticates admin users and authorizes access based on repository permissions.
 
 ---
 
