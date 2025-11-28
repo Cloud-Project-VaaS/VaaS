@@ -75,6 +75,41 @@ This project is built on a modern, 100% serverless, event-driven architecture de
 
 ---
 
+## Under the Hood: Architecture & Pipelines
+The system is composed of four distinct, event-driven pipelines that operate asynchronously to manage the issue lifecycle and gather intelligence.
+
+### **1. Installation & Intelligence Pipeline**
+This pipeline ensures the system is aware of new repositories and continuously learns about the development team.
+- **Installation Tracker:** When the GitHub App is installed on a new repo, a webhook triggers the installation-manager Lambda. This function registers the repository in the DynamoDB table github-installations, marking it for future scans.
+- **Expertise Scanner:** A weekly scheduled event triggers the expertise_scanner Lambda. It performs a deep scan of the last 30 days of commit history, merged PRs, and file changes. It uses Mistral 7B (Bedrock) to analyze this data, inferring developer technical skills and the repository's team structure (e.g., distinguishing "Frontend" from "Backend" teams). These profiles are saved to the RepoExpertise table.
+- **Availability Inference:** A separate job, infer-availability, analyzes timestamp data from commits and comments over the last 90 days. It calculates the optimal 8-hour working window (UTC) for each contributor to ensure issues aren't assigned to sleeping developers. This data is stored in UserAvailability.
+
+### **2. Issue Triage Pipeline (Hourly)**
+This is the core "Hot Path" for real-time issue management, executing every hour.
+- **Fetch:** The fetch_and_classify_issues Lambda wakes up hourly, pulling new issues from all registered repos via the GitHub API. It deduplicates against DynamoDB to ensure processing efficiency and pushes valid new issues to EventBridge.
+- **Filter & Enrich:**
+  - **Spam Check:** The classify_spam Lambda consumes the new issue event and uses Llama 3 8B to detect and flag spam immediately.
+  - **Metadata:** The enrich_metadata Lambda then uses LLMs to rewrite vague titles and bodies for clarity, ensuring downstream models have high-quality input.
+- **Classification:** A single, unified Lambda function uses Mistral 7B (Bedrock) to analyze the enriched content and predict both the Issue Type (Bug/Feature) and Priority (High/Low) in one pass, replacing the previous multi-step BERT pipeline.
+- **Component Detection:** A subsequent Lambda function analyzes the issue to identify the specific Component (e.g., Frontend, Backend, Infrastructure) affected, enabling more granular assignment logic.
+- **Assignment:** The classify_assignee Lambda acts as the "Master Agent." It reads the issue context, developer skills (RepoExpertise), availability (UserAvailability), and current workload (IssuesTrackingTable) from DynamoDB. It selects the best assignee using DeepSeek V3 and updates the issue on GitHub via API.
+
+### **3. SLA & Stale Handler (Maintenance)**
+A dedicated "Housekeeper" pipeline runs every hour to maintain hygiene and accountability.
+- **Sync:** Checks open issues against GitHub to see if they were closed externally (e.g., by a user), syncing the status to DynamoDB.
+- **Stale Enforcement:** Automatically tags issues with no activity for 7 days as Stale.
+- **SLA Monitoring:** Monitors High-Priority issues. If an issue remains open past the threshold (e.g., 54 hours for High), it proactively pings the assignee with a comment and applies an SLA Breached label.
+
+### **4. Control Plane (Dashboard)**
+A centralized interface for administration and visibility.
+- **Interface:** A Streamlit dashboard hosted on an AWS EC2 (t3.small) instance.
+- **Security:** Secured via GitHub OAuth, ensuring users can only manage repositories they have write-access to.
+- **Capabilities:**
+  - **Visualization:** View distribution metrics for issue types and priorities.
+  - **Management:** Manually edit AI-inferred expertise and working hours.
+  - **Manual Triggers:** Immediately trigger the classification pipeline for a specific repository on-demand.
+
+---
 ## Getting Started
 
 ### 1. Install the GitHub App
