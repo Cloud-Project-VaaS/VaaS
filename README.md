@@ -111,6 +111,10 @@ A centralized interface for administration and visibility.
 ---
 ## Architecture Diagrams
 
+![Index](images/Index.svg)
+
+---
+
 ![Installation Pipeline](images/Installation_Pipeline.svg)
 
 ---
