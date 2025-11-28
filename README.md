@@ -58,7 +58,9 @@ This project is built on a modern, 100% serverless, event-driven architecture de
 
 #### Intelligence & AI
 - AWS Bedrock: Provides access to Foundational Models.
-- Mistral 7B Instruct (v0:2): Used for inferring developer expertise and team structures.
+- Mistral 7B Instruct (v0:2):
+  - Used for inferring developer expertise and team structures.
+  - Used for inferring type, priority and component of an issue.
 - Llama 3 8B Instruct: Used for spam filtering and metadata enrichment (rewriting titles/bodies).
 - DeepSeek V3: Powering the "Master Agent" for final issue assignment decisions.
 
