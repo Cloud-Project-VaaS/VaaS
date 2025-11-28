@@ -111,22 +111,27 @@ A centralized interface for administration and visibility.
 ---
 ## Architecture Diagrams
 
+### Index
 ![Index](images/Index.svg)
 
 ---
 
+### Installation Pipeline
 ![Installation Pipeline](images/Installation_Pipeline.svg)
 
 ---
 
+### Issue Classifying Pipeline
 ![Issue Classifying Pipeline](images/Issue_Classifying_Pipeline.svg)
 
 ---
 
+### SLA and Stale Pipeline
 ![Sla and Stale Issue Pipeline](images/SLA_and_Stale_Pipeline.svg)
 
 ---
 
+### Dashboard Running
 ![Dashboard Running](images/Dashboard.svg)
 
 ---
